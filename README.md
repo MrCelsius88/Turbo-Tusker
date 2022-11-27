@@ -1,4 +1,6 @@
-# My journey into making an entire game from scratch, handmade hero style.
+# Cavern
+
+## My journey into making an entire game from scratch, handmade hero style.
 I will try to post updates in a blog post or youtube video format.
 
 ## Im my efforts to become a better programmer, all I ask is that if you see anything I can improve on please don't hesitate to reach out!
