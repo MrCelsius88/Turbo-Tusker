@@ -12,6 +12,18 @@
 #define global static
 #define persist static
 
+typedef struct
+{
+    int pixelBitCount;
+    int pixelByteCount;
+    int bufferSize;
+} LinuxPixmapData;
+
+global LinuxPixmapData pixmapData;
+global void* pixmapMemory;
+global XImage* pixmapHandle;
+global GC pixmapGfxContext;
+
 internal void
 LinuxSetSizeHint(Display* display, Window window, int minWidth, int maxWidth, int minHeight, int maxHeight)
 {
@@ -49,6 +61,35 @@ LinuxToggleWindowMaximize(Display* display, Window window)
     return XSendEvent(display, DefaultRootWindow(display), False, SubstructureNotifyMask, (XEvent*)&event);
 }
 
+internal void
+LinuxResizePixmapSection(Display* display, Window window, int screen, XVisualInfo visualInfo, int width, int height)
+{
+    if (pixmapHandle)
+    {
+        XDestroyImage(pixmapHandle); // NOTE(Cel): This also frees image memory!!
+    }
+    
+    if (!pixmapGfxContext)
+    {
+        pixmapGfxContext = DefaultGC(display, screen);
+    }
+    
+    pixmapData.pixelBitCount = 32;
+    pixmapData.pixelByteCount = pixmapData.pixelBitCount / 8;
+    pixmapData.bufferSize = width * height * pixmapData.pixelByteCount;
+    
+    pixmapHandle = XCreateImage(display, visualInfo.visual, visualInfo.depth, ZPixmap, 0, pixmapMemory, width, height, pixmapData.pixelBitCount, 0);
+}
+
+internal void
+LinuxUpdateWindow(Display* display, Window window, GC graphicsContext, int x, int y, int width, int height)
+{
+    if (pixmapHandle->data)
+    {
+        XPutImage(display, window, graphicsContext, pixmapHandle, 0, 0, x, y, width, height);
+    }
+}
+
 int main(int argc, char** args)
 {
     int width = 800, height = 600;
@@ -65,7 +106,7 @@ int main(int argc, char** args)
     // NOTE(Cel): The attributes we set in windowAttributes also needs to be OR'd in to the attributeMask
     windowAttributes.background_pixel = 0;
     windowAttributes.colormap = XCreateColormap(display, root, visualInfo.visual, AllocNone);
-    windowAttributes.event_mask = StructureNotifyMask;
+    windowAttributes.event_mask = StructureNotifyMask | ExposureMask;
     unsigned long attributeMask = CWBackPixel | CWColormap | CWEventMask;
     
     Window window = XCreateWindow(display, root, 0, 0, width, height, 0, visualInfo.depth, InputOutput, visualInfo.visual, attributeMask, &windowAttributes);
@@ -82,12 +123,32 @@ int main(int argc, char** args)
     int gameRunning = 1;
     while (gameRunning)
     {
+        /* EVENT LOOP */
         XEvent event = {0};
         while (XPending(display) > 0)
         {
             XNextEvent(display, &event);
             switch (event.type)
             {
+                case Expose:
+                {
+                    XExposeEvent* exposeEvent = (XExposeEvent*)&event;
+                    if (exposeEvent->window == window)
+                    {
+                        LinuxUpdateWindow(display, window, pixmapGfxContext, exposeEvent->x, exposeEvent->y, exposeEvent->width, exposeEvent->height);
+                    }
+                } break;
+                
+                case ConfigureNotify:
+                {
+                    XConfigureEvent* configureEvent = (XConfigureEvent*)&event;
+                    if (configureEvent->window == window)
+                    {
+                        LinuxResizePixmapSection(display, window, screen, visualInfo, configureEvent->width, configureEvent->height);
+                    }
+                } break;
+                
+                // NOTE(Cel): Run this when WM_DELETE_WINDOW resolution fails.
                 case DestroyNotify:
                 {
                     XDestroyWindowEvent* destroyEvent = (XDestroyWindowEvent*)&event;
@@ -101,7 +162,6 @@ int main(int argc, char** args)
                 {
                     if (event.xclient.data.l[0] == wmDelete)
                     {
-                        XDestroyWindow(display, window);
                         gameRunning = 0;
                     }
                 } break;
