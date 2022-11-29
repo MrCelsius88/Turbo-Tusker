@@ -1,12 +1,36 @@
+// NOTE(Cel): CRT for now... :)
 #include <stdlib.h>
 #include <stdio.h>
+// NOTE(Cel): But maybe hold on to this one...
+#include <stdint.h>
+
+#include <sys/mman.h>
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/Xatom.h>
 
+/* 
+- TODO(Cel)
+- The big TODO list.
+
+[ ] Avoid Linking With The CRT.
+ 
+*/
+
 // Special thanks to this absolute chad:
 // https://handmade.network/forums/articles/t/2834-tutorial_a_tour_through_xlib_and_related_technologies
+
+typedef int8_t s8;
+typedef uint8_t u8;
+typedef int16_t s16;
+typedef uint16_t u16;
+typedef int32_t s32;
+typedef uint32_t u32;
+typedef int64_t s64;
+typedef uint64_t u64;
+typedef float f32;
+typedef double f64;
 
 #define internal static
 #define global static
@@ -20,9 +44,28 @@ typedef struct
 } LinuxPixmapData;
 
 global LinuxPixmapData pixmapData;
-global void* pixmapMemory;
 global XImage* pixmapHandle;
-global GC pixmapGfxContext;
+int pixmapWidth, pixmapHeight;
+
+internal void
+RenderGoofyGradient(int xOffset, int yOffset, void* data)
+{
+    int pitch = pixmapWidth * 4;
+    u8* row = (u8*)data;
+    for (int y = 0; y < pixmapHeight; ++y)
+    {
+        u32* pixel = (u32*)row;
+        for (int x = 0; x < pixmapWidth; ++x)
+        {
+            u8 red = 0;
+            u8 green = (u8)(y + yOffset);
+            u8 blue = (u8)(x + xOffset);
+            
+            *pixel++ = red << 16 | green << 8 | blue;
+        }
+        row += pitch;
+    }
+}
 
 internal void
 LinuxSetSizeHint(Display* display, Window window, int minWidth, int maxWidth, int minHeight, int maxHeight)
@@ -66,27 +109,29 @@ LinuxResizePixmapSection(Display* display, Window window, int screen, XVisualInf
 {
     if (pixmapHandle)
     {
-        XDestroyImage(pixmapHandle); // NOTE(Cel): This also frees image memory!!
+        munmap(pixmapHandle->data, pixmapData.bufferSize);
+        pixmapHandle->data = NULL;
+        
+        XDestroyImage(pixmapHandle); // NOTE(Cel): This also frees image memory!! So we need to free pixmapMemory first, and make it NULL along with the pixmapHandle pointer to the data.
     }
     
-    if (!pixmapGfxContext)
-    {
-        pixmapGfxContext = DefaultGC(display, screen);
-    }
-    
+    pixmapWidth = width;
+    pixmapHeight = height;
     pixmapData.pixelBitCount = 32;
     pixmapData.pixelByteCount = pixmapData.pixelBitCount / 8;
-    pixmapData.bufferSize = width * height * pixmapData.pixelByteCount;
+    pixmapData.bufferSize = (pixmapWidth * pixmapHeight) * pixmapData.pixelByteCount;
     
-    pixmapHandle = XCreateImage(display, visualInfo.visual, visualInfo.depth, ZPixmap, 0, pixmapMemory, width, height, pixmapData.pixelBitCount, 0);
+    void* pixmapMemory = mmap(0, pixmapData.bufferSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    
+    pixmapHandle = XCreateImage(display, visualInfo.visual, visualInfo.depth, ZPixmap, 0, pixmapMemory, pixmapWidth, pixmapHeight, pixmapData.pixelBitCount, 0);
 }
 
 internal void
 LinuxUpdateWindow(Display* display, Window window, GC graphicsContext, int x, int y, int width, int height)
 {
-    if (pixmapHandle->data)
+    if (pixmapHandle)
     {
-        XPutImage(display, window, graphicsContext, pixmapHandle, 0, 0, x, y, width, height);
+        XPutImage(display, window, graphicsContext, pixmapHandle, 0, 0, y, x, width, height);
     }
 }
 
@@ -104,10 +149,13 @@ int main(int argc, char** args)
     
     XSetWindowAttributes windowAttributes = {0};
     // NOTE(Cel): The attributes we set in windowAttributes also needs to be OR'd in to the attributeMask
-    windowAttributes.background_pixel = 0;
+    
+    // TODO(Cel): Do we need these?
+    // windowAttributes.bit_gravity = StaticGravity;
+    // windowAttributes.background_pixel = 0;
     windowAttributes.colormap = XCreateColormap(display, root, visualInfo.visual, AllocNone);
     windowAttributes.event_mask = StructureNotifyMask | ExposureMask;
-    unsigned long attributeMask = CWBackPixel | CWColormap | CWEventMask;
+    u32 attributeMask = CWColormap | CWEventMask;
     
     Window window = XCreateWindow(display, root, 0, 0, width, height, 0, visualInfo.depth, InputOutput, visualInfo.visual, attributeMask, &windowAttributes);
     if (!window) { fprintf(stderr, "Unable to create window!\n"); exit(1); }
@@ -117,6 +165,11 @@ int main(int argc, char** args)
     XMapWindow(display, window);
     
     XFlush(display);
+    
+    GC gfxContext = DefaultGC(display, screen);
+    
+    int xOffset = 0, yOffset = 0;
+    LinuxResizePixmapSection(display, window, screen, visualInfo, width, height);
     
     Atom wmDelete = XInternAtom(display, "WM_DELETE_WINDOW", False);
     if (!XSetWMProtocols(display, window, &wmDelete, 1)) { fprintf(stderr, "Unable to register WM_DELETE_WINDOW"); }
@@ -135,7 +188,8 @@ int main(int argc, char** args)
                     XExposeEvent* exposeEvent = (XExposeEvent*)&event;
                     if (exposeEvent->window == window)
                     {
-                        LinuxUpdateWindow(display, window, pixmapGfxContext, exposeEvent->x, exposeEvent->y, exposeEvent->width, exposeEvent->height);
+                        // Calling this here causes flicker? TODO(Cel) Find a permanent solution for the flickering.
+                        //LinuxUpdateWindow(display, window, gfxContext, 0, 0, pixmapWidth, pixmapHeight);
                     }
                 } break;
                 
@@ -167,6 +221,10 @@ int main(int argc, char** args)
                 } break;
             }
         }
+        
+        RenderGoofyGradient(xOffset, yOffset, pixmapHandle->data);
+        ++xOffset;
+        LinuxUpdateWindow(display, window, gfxContext, 0, 0, pixmapWidth, pixmapHeight);
     }
     
     return 0;
