@@ -38,24 +38,37 @@ typedef double f64;
 
 typedef struct
 {
+    int width, height;
+} LinuxWindowDimension;
+
+typedef struct
+{
+    // NOTE(Cel): Pixels are 32-bits wide
+    // Memory Order: 0x BB GG RR XX
+    // Little Endian: 0x XX RR GG BB
     int pixelBitCount;
     int pixelByteCount;
     int bufferSize;
 } LinuxPixmapData;
 
-global LinuxPixmapData pixmapData;
-global XImage* pixmapHandle;
-int pixmapWidth, pixmapHeight;
+typedef struct
+{
+    XImage* handle;
+    int width, height;
+    LinuxPixmapData data;
+} LinuxOffscreenBuffer;
+
+global LinuxOffscreenBuffer g_backbuffer;
 
 internal void
-RenderGoofyGradient(int xOffset, int yOffset, void* data)
+RenderGoofyGradient(LinuxOffscreenBuffer* buffer, int xOffset, int yOffset)
 {
-    int pitch = pixmapWidth * 4;
-    u8* row = (u8*)data;
-    for (int y = 0; y < pixmapHeight; ++y)
+    int pitch = buffer->width * 4;
+    u8* row = (u8*)buffer->handle->data;
+    for (int y = 0; y < buffer->height; ++y)
     {
         u32* pixel = (u32*)row;
-        for (int x = 0; x < pixmapWidth; ++x)
+        for (int x = 0; x < buffer->width; ++x)
         {
             u8 red = 0;
             u8 green = (u8)(y + yOffset);
@@ -82,6 +95,15 @@ LinuxSetSizeHint(Display* display, Window window, int minWidth, int maxWidth, in
     XSetWMNormalHints(display, window, &hints);
 }
 
+internal LinuxWindowDimension
+LinuxGetWindowDimension(Display* display, Window window)
+{
+    LinuxWindowDimension out;
+    XGetGeometry(display, window, 0, 0, 0, &out.width, &out.height, 0, 0);
+    
+    return out;
+}
+
 internal Status
 LinuxToggleWindowMaximize(Display* display, Window window)
 {
@@ -105,39 +127,41 @@ LinuxToggleWindowMaximize(Display* display, Window window)
 }
 
 internal void
-LinuxResizePixmapSection(Display* display, Window window, int screen, XVisualInfo visualInfo, int width, int height)
+LinuxResizePixmapSection(LinuxOffscreenBuffer* buffer, Display* display, Window window, int screen, XVisualInfo visualInfo, int width, int height)
 {
-    if (pixmapHandle)
+    // NOTE(Cel): We only need to run this if we call
+    // this function more than once!
+    if (buffer->handle)
     {
-        munmap(pixmapHandle->data, pixmapData.bufferSize);
-        pixmapHandle->data = NULL;
+        munmap(buffer->handle->data, buffer->data.bufferSize);
+        buffer->handle->data = NULL;
         
-        XDestroyImage(pixmapHandle); // NOTE(Cel): This also frees image memory!! So we need to free pixmapMemory first, and make it NULL along with the pixmapHandle pointer to the data.
+        XDestroyImage(buffer->handle); // NOTE(Cel): This also frees image memory!! So we need to free pixmapMemory first, and make it NULL along with the pixmapHandle pointer to the data.
     }
     
-    pixmapWidth = width;
-    pixmapHeight = height;
-    pixmapData.pixelBitCount = 32;
-    pixmapData.pixelByteCount = pixmapData.pixelBitCount / 8;
-    pixmapData.bufferSize = (pixmapWidth * pixmapHeight) * pixmapData.pixelByteCount;
+    buffer->width = width;
+    buffer->height = height;
+    buffer->data.pixelBitCount = 32;
+    buffer->data.pixelByteCount = buffer->data.pixelBitCount / 8;
+    buffer->data.bufferSize = (buffer->width * buffer->height) * buffer->data.pixelByteCount;
     
-    void* pixmapMemory = mmap(0, pixmapData.bufferSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    void* pixmapMemory = mmap(0, buffer->data.bufferSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     
-    pixmapHandle = XCreateImage(display, visualInfo.visual, visualInfo.depth, ZPixmap, 0, pixmapMemory, pixmapWidth, pixmapHeight, pixmapData.pixelBitCount, 0);
+    buffer->handle = XCreateImage(display, visualInfo.visual, visualInfo.depth, ZPixmap, 0, pixmapMemory, buffer->width, buffer->height, buffer->data.pixelBitCount, 0);
 }
 
 internal void
-LinuxUpdateWindow(Display* display, Window window, GC graphicsContext, int x, int y, int width, int height)
+LinuxDisplayBuffer(LinuxOffscreenBuffer* buffer, Display* display, Window window, GC graphicsContext, int x, int y, int width, int height)
 {
-    if (pixmapHandle)
+    if (buffer->handle)
     {
-        XPutImage(display, window, graphicsContext, pixmapHandle, 0, 0, y, x, width, height);
+        XPutImage(display, window, graphicsContext, buffer->handle, 0, 0, y, x, width, height);
     }
 }
 
 int main(int argc, char** args)
 {
-    int width = 800, height = 600;
+    int width = 1280, height = 720;
     Display* display = XOpenDisplay(0);
     if (!display) { fprintf(stderr, "Unable to open X display!\n"); exit(1); }
     int root = DefaultRootWindow(display);
@@ -154,7 +178,7 @@ int main(int argc, char** args)
     // windowAttributes.bit_gravity = StaticGravity;
     // windowAttributes.background_pixel = 0;
     windowAttributes.colormap = XCreateColormap(display, root, visualInfo.visual, AllocNone);
-    windowAttributes.event_mask = StructureNotifyMask | ExposureMask;
+    windowAttributes.event_mask = StructureNotifyMask;
     u32 attributeMask = CWColormap | CWEventMask;
     
     Window window = XCreateWindow(display, root, 0, 0, width, height, 0, visualInfo.depth, InputOutput, visualInfo.visual, attributeMask, &windowAttributes);
@@ -166,39 +190,28 @@ int main(int argc, char** args)
     
     XFlush(display);
     
-    GC gfxContext = DefaultGC(display, screen);
-    
     int xOffset = 0, yOffset = 0;
-    LinuxResizePixmapSection(display, window, screen, visualInfo, width, height);
+    LinuxResizePixmapSection(&g_backbuffer, display, window, screen, visualInfo, width, height);
     
     Atom wmDelete = XInternAtom(display, "WM_DELETE_WINDOW", False);
     if (!XSetWMProtocols(display, window, &wmDelete, 1)) { fprintf(stderr, "Unable to register WM_DELETE_WINDOW"); }
+    GC gfxContext = DefaultGC(display, screen);
     int gameRunning = 1;
     while (gameRunning)
     {
         /* EVENT LOOP */
-        XEvent event = {0};
+        XEvent event;
         while (XPending(display) > 0)
         {
             XNextEvent(display, &event);
             switch (event.type)
             {
-                case Expose:
-                {
-                    XExposeEvent* exposeEvent = (XExposeEvent*)&event;
-                    if (exposeEvent->window == window)
-                    {
-                        // Calling this here causes flicker? TODO(Cel) Find a permanent solution for the flickering.
-                        //LinuxUpdateWindow(display, window, gfxContext, 0, 0, pixmapWidth, pixmapHeight);
-                    }
-                } break;
-                
                 case ConfigureNotify:
                 {
                     XConfigureEvent* configureEvent = (XConfigureEvent*)&event;
                     if (configureEvent->window == window)
                     {
-                        LinuxResizePixmapSection(display, window, screen, visualInfo, configureEvent->width, configureEvent->height);
+                        LinuxResizePixmapSection(&g_backbuffer, display, window, screen, visualInfo, configureEvent->width, configureEvent->height);
                     }
                 } break;
                 
@@ -222,9 +235,11 @@ int main(int argc, char** args)
             }
         }
         
-        RenderGoofyGradient(xOffset, yOffset, pixmapHandle->data);
+        RenderGoofyGradient(&g_backbuffer, xOffset, yOffset);
         ++xOffset;
-        LinuxUpdateWindow(display, window, gfxContext, 0, 0, pixmapWidth, pixmapHeight);
+        // NOTE(Cel): Xlib does not have a stretchdibits equivielant, but this is not a big deal because we will be going to 
+        // hardware accelerated rendering anyway.
+        LinuxDisplayBuffer(&g_backbuffer, display, window, gfxContext, 0, 0, g_backbuffer.width, g_backbuffer.height);
     }
     
     return 0;
