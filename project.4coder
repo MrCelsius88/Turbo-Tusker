@@ -1,5 +1,5 @@
 version(2);
-project_name = "Cavern :)";
+project_name = "Turbo Tusker :)";
 patterns = {
     "*.c",
     "*.cpp",
@@ -27,9 +27,9 @@ commands = {
         .linux = "./build.sh",
         .mac = "./build.sh", },
     .run = { .out = "*compilation*", .footer_panel = false, .save_dirty_files = false,
-        .win = "build\\Cavern",
-        .linux = "build/Cavern",
-        .mac = "build/Cavern", },
+        .win = "build\\TurboTusker",
+        .linux = "build/TurboTusker",
+        .mac = "build/TurboTusker", },
 };
 fkey_command = {
     .F1 = "build",
