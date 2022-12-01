@@ -161,7 +161,7 @@ LinuxDisplayBuffer(LinuxOffscreenBuffer* buffer, Display* display, Window window
 
 int main(int argc, char** args)
 {
-    int width = 1280, height = 720;
+    int width = 800, height = 600;
     Display* display = XOpenDisplay(0);
     if (!display) { fprintf(stderr, "Unable to open X display!\n"); exit(1); }
     int root = DefaultRootWindow(display);
