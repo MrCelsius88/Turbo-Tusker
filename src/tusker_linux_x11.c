@@ -245,20 +245,14 @@ LinuxInitOpenGLWindow(LinuxDisplayInfo* displayInfo)
     {
         GLX_CONTEXT_MAJOR_VERSION_ARB, 3,
         GLX_CONTEXT_MINOR_VERSION_ARB, 0,
-        GLX_CONTEXT_FLAGS_ARB, GLX_CONTEXT_ES_PROFILE_BIT_EXT,
+        GLX_CONTEXT_PROFILE_MASK_ARB, GLX_CONTEXT_ES_PROFILE_BIT_EXT,
         None
     };
     
     const char* glxExtensions = glXQueryExtensionsString(displayInfo->xDisplay, displayInfo->xScreen);
     GLXContext glxContext = 0;
-    if (!LinuxCheckOpenGLExtension(glxExtensions, "GLX_ARB_create_context"))
-    {
-        glxContext = glXCreateNewContext(displayInfo->xDisplay, fbc[0], GLX_RGBA_TYPE, 0, True);
-    }
-    else
-    {
-        glxContext = glXCreateContextAttribsARB(displayInfo->xDisplay, fbc[0], 0, true, contextAttributes);
-    }
+    glxContext = glXCreateContextAttribsARB(displayInfo->xDisplay, fbc[0], 0, true, contextAttributes);
+    
     XSync(displayInfo->xDisplay, False);
     
     if (!glXIsDirect(displayInfo->xDisplay, glxContext))
