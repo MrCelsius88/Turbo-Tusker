@@ -6,24 +6,31 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <linux/input.h>
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/Xatom.h>
 #include <GL/glx.h>
 
-/* 
-- TODO(Cel)
-- The big TODO list.
-
-[ ] Avoid Linking With The CRT.
- 
-*/
-
-// Special thanks to these absolute chads:
+// Special thanks to these absolute chads for Xlib help:
 // https://handmade.network/forums/articles/t/2834-tutorial_a_tour_through_xlib_and_related_technologies
 // https://github.com/gamedevtech/X11OpenGLWindow
+
+// Glx loading resources:
+// https://registry.khronos.org/OpenGL/extensions/ARB/GLX_ARB_create_context.txt
+
+// Gamepad input resources used:
+// https://docs.kernel.org/input/input.html
+
+/* TODO Known bugs: 
+- Using wireless bluetooth controllers.
+*/
 
 #define internal static
 #define global static
@@ -40,8 +47,6 @@ typedef uint64_t u64;
 typedef float f32;
 typedef double f64;
 
-typedef GLXContext (*glXCreateContextAttribsARBProc)(Display*, GLXFBConfig, GLXContext, Bool, const int*);
-
 typedef struct
 {
     Display* xDisplay;
@@ -52,6 +57,22 @@ typedef struct
 } LinuxDisplayInfo;
 
 global bool g_gameRunning = true;
+
+#define GLX_CREATE_CONTEXT_ATTRIBS_ARB(name) GLXContext name(Display *dpy, GLXFBConfig config, GLXContext share_context, Bool direct, const int *attrib_list)
+typedef GLX_CREATE_CONTEXT_ATTRIBS_ARB(glx_create_context_attribs_arb);
+GLX_CREATE_CONTEXT_ATTRIBS_ARB(glXCreateContextAttribsARBStub)
+{
+    return NULL;
+}
+global glx_create_context_attribs_arb* glXCreateContextAttribsARB_ = glXCreateContextAttribsARBStub;
+#define glXCreateContextAttribsARB glXCreateContextAttribsARB_
+
+internal void
+LinuxLoadGlxFuncs(void)
+{
+    glXCreateContextAttribsARB = glXGetProcAddressARB("glXCreateContextAttribsARB");
+    if (!glXCreateContextAttribsARB) { glXCreateContextAttribsARB = glXCreateContextAttribsARBStub; }
+}
 
 internal bool
 LinuxCheckOpenGLExtension(const char* extList, const char* extension)
@@ -109,8 +130,7 @@ LinuxDisplayInit(LinuxDisplayInfo* displayInfo)
     displayInfo->xScreen = DefaultScreen(displayInfo->xDisplay);
     displayInfo->xRootWindow = DefaultRootWindow(displayInfo->xDisplay);
     
-    // TODO(Cel): We can probably bring this code back so that it still sets up the software
-    // renderer if we do not want to use OpenGL.
+    // TODO(Cel): We cant use this because of OpenGL
 #if 0
     int screenBitDepth = 24;
     if (!XMatchVisualInfo(displayInfo->xDisplay, displayInfo->xScreen, screenBitDepth, TrueColor, &displayInfo->xVisualInfo))
@@ -193,9 +213,10 @@ LinuxInitOpenGLWindow(LinuxDisplayInfo* displayInfo)
 {
     int majorGLX, minorGLX;
     glXQueryVersion(displayInfo->xDisplay, &majorGLX, &minorGLX);
-    if (majorGLX <= 1 && minorGLX < 2)
+    // TODO(Cel): Maybe bump this down to version 1.2...
+    if (majorGLX <= 1 && minorGLX < 4)
     {
-        fprintf(stderr, "A GLX Version of 1.2 or greater is required!\n");
+        fprintf(stderr, "A GLX Version of 1.4 or greater is required!\n");
         return 1;
     }
     else
@@ -239,19 +260,23 @@ LinuxInitOpenGLWindow(LinuxDisplayInfo* displayInfo)
         return 1;
     }
     
-    glXCreateContextAttribsARBProc glXCreateContextAttribsARB = 0;
-    glXCreateContextAttribsARB = (glXCreateContextAttribsARBProc) glXGetProcAddressARB("glXCreateContextAttribsARB");
     int contextAttributes[] =
     {
-        GLX_CONTEXT_MAJOR_VERSION_ARB, 3,
-        GLX_CONTEXT_MINOR_VERSION_ARB, 0,
-        GLX_CONTEXT_PROFILE_MASK_ARB, GLX_CONTEXT_ES_PROFILE_BIT_EXT,
+        // NOTE(Cel): Makes testing easier, switch back to ES when vs and fs are created.
+        GLX_CONTEXT_MAJOR_VERSION_ARB, 2, // 3
+        GLX_CONTEXT_MINOR_VERSION_ARB, 1, // 0
+        GLX_CONTEXT_PROFILE_MASK_ARB, GLX_CONTEXT_CORE_PROFILE_BIT_ARB, 
+        //GLX_CONTEXT_PROFILE_MASK_ARB, GLX_CONTEXT_ES_PROFILE_BIT_EXT,
         None
     };
     
-    const char* glxExtensions = glXQueryExtensionsString(displayInfo->xDisplay, displayInfo->xScreen);
     GLXContext glxContext = 0;
     glxContext = glXCreateContextAttribsARB(displayInfo->xDisplay, fbc[0], 0, true, contextAttributes);
+    if (glxContext == NULL)
+    {
+        fprintf(stderr, "Unable to obtain glx context!\n");
+        return 1;
+    }
     
     XSync(displayInfo->xDisplay, False);
     
@@ -275,6 +300,18 @@ LinuxInitOpenGLWindow(LinuxDisplayInfo* displayInfo)
     return 0;
 }
 
+internal Atom
+LinuxGetCloseMessage(LinuxDisplayInfo* displayInfo)
+{
+    Atom wmDelete = XInternAtom(displayInfo->xDisplay, "WM_DELETE_WINDOW", False);
+    if (!XSetWMProtocols(displayInfo->xDisplay, displayInfo->xWindow, &wmDelete, 1))
+    {
+        fprintf(stderr, "Unable to register WM_DELETE_WINDOW"); 
+    }
+    
+    return wmDelete;
+}
+
 int main(int argc, char** argv)
 {
     int width = 800, height = 600;
@@ -289,25 +326,87 @@ int main(int argc, char** argv)
     // NOTE(Cel): LinuxInitOpenGL works different than Casey's Win32InitOpenGL
     // because GLX requires setting up window creating AND operating on window after it is created
     // the InitOpenGL function will ALSO create the window.
+    LinuxLoadGlxFuncs();
     if (LinuxInitOpenGLWindow(&displayInfo) != 0)
     {
         fprintf(stderr, "Error initializing OpenGL!\n");
         return 1;
     }
     
-    Atom wmDelete = XInternAtom(displayInfo.xDisplay, "WM_DELETE_WINDOW", False);
-    if (!XSetWMProtocols(displayInfo.xDisplay, displayInfo.xWindow, &wmDelete, 1))
-    {
-        fprintf(stderr, "Unable to register WM_DELETE_WINDOW"); 
-    }
+    Atom wmDelete = LinuxGetCloseMessage(&displayInfo);
+    
+    int gamepad = open("/dev/input/by-id/usb-Microsoft_Controller_30394E4F30343234353133303133-event-joystick", O_RDONLY | O_NONBLOCK);
+    int gamepadStickLeftX = 0;
+    int gamepadStickLeftY = 0;
+    bool gamepadButtonA = 0;
+    bool gamepadButtonB = 0;
+    
+    persist f32 testValue = 0;
+    
     while (g_gameRunning)
     {
         LinuxDoEvents(&displayInfo, wmDelete);
         
+        struct input_event events[2]; // TODO(Cel): Change this to something smaller like 1, 2, or 4 at max.
+        int bufferRead = read(gamepad, events, sizeof(events));
+        // NOTE(Cel): Besides an error, -1 can also mean that there are no input events in the buffer.
+        if (bufferRead != -1) 
+        {
+            int eventCount = bufferRead / sizeof(struct input_event);
+            for (int eventIndex = 0; eventIndex < eventCount; ++eventIndex)
+            {
+                struct input_event* event = &events[eventIndex];
+                switch (event->type)
+                {
+                    case EV_ABS: // Joystick movement
+                    {
+                        switch (event->code)
+                        {
+                            case ABS_X: { gamepadStickLeftX = event->value; } break;
+                            case ABS_Y: { gamepadStickLeftY = event->value; } break;
+                        }
+                    } break;
+                    
+                    case EV_KEY:
+                    {
+                        switch (event->code)
+                        {
+                            case BTN_A: { gamepadButtonA = event->value; } break;
+                            case BTN_B: { gamepadButtonB = event->value; } break;
+                        }
+                    } break;
+                }
+            }
+        }
+        
+        if (gamepadButtonA != 0 || gamepadButtonB != 0)
+            fprintf(stderr, "A: %d B: %d Left stick: %d, %d\n", gamepadButtonA, gamepadButtonB, gamepadStickLeftX, gamepadStickLeftY);
+        
+        if (gamepadButtonA)
+        {
+            testValue+=.01f;
+        }
+        else if (gamepadButtonB)
+        {
+            testValue-=.01f;
+        }
+        
         glClearColor(0.2f, 0.3f, 0.3f, 1.f);
         glClear(GL_COLOR_BUFFER_BIT);
         
+        glBegin(GL_TRIANGLES);
+        
+        glColor3f(  1.0f,  testValue,  0.0f);
+        glVertex3f(-0.5f, -0.5f,  0.0f);
+        glColor3f(  0.0f,  testValue,  0.0f);
+        glVertex3f( 0.5f, -0.5f,  0.0f);
+        glColor3f(  0.0f,  testValue,  1.0f);
+        glVertex3f( 0.0f,  0.5f,  0.0f);
+        
+        glEnd();
+        
         glXSwapBuffers(displayInfo.xDisplay, displayInfo.xWindow);
+        
     }
     
     return 0;
