@@ -27,6 +27,8 @@
 
 // Gamepad input resources used:
 // https://docs.kernel.org/input/input.html
+// https://github.com/MysteriousJ/Joystick-Input-Examples/blob/main/src/evdev.cpp
+// https://handmade.network/forums/t/3673-modern_way_to_read_gamepad_input_with_c_on_linux
 
 /* TODO Known bugs: 
 - Using wireless bluetooth controllers.
@@ -70,7 +72,7 @@ global glx_create_context_attribs_arb* glXCreateContextAttribsARB_ = glXCreateCo
 internal void
 LinuxLoadGlxFuncs(void)
 {
-    glXCreateContextAttribsARB = glXGetProcAddressARB("glXCreateContextAttribsARB");
+    glXCreateContextAttribsARB = (glx_create_context_attribs_arb*)glXGetProcAddressARB("glXCreateContextAttribsARB");
     if (!glXCreateContextAttribsARB) { glXCreateContextAttribsARB = glXCreateContextAttribsARBStub; }
 }
 
@@ -150,7 +152,7 @@ LinuxCreateWindow(LinuxDisplayInfo* displayInfo, const char* title, int posX, in
     xWindowAttributes.background_pixel = BlackPixel(displayInfo->xDisplay, displayInfo->xScreen);
     xWindowAttributes.override_redirect = True;
     xWindowAttributes.colormap = XCreateColormap(displayInfo->xDisplay, displayInfo->xRootWindow, displayInfo->xVisualInfo->visual, AllocNone);
-    xWindowAttributes.event_mask = ExposureMask | StructureNotifyMask;
+    xWindowAttributes.event_mask = ExposureMask | StructureNotifyMask | KeyPressMask | KeyReleaseMask;
     u32 attributeMask = CWBackPixel | CWColormap | CWBorderPixel | CWEventMask;
     
     displayInfo->xWindow = XCreateWindow(displayInfo->xDisplay, displayInfo->xRootWindow, posX, posY, width, height, 0, displayInfo->xVisualInfo->depth, InputOutput, displayInfo->xVisualInfo->visual, attributeMask, &xWindowAttributes);
@@ -177,6 +179,45 @@ LinuxDoEvents(LinuxDisplayInfo* displayInfo, Atom wmDelete)
         XNextEvent(displayInfo->xDisplay, &event);
         switch (event.type)
         {
+            // TODO(Cel): Becuase we are running this game from gamepad-only, this keyboard
+            // input should only be for debug builds of game.
+            case KeyPress:  
+            case KeyRelease:
+            {
+                XKeyPressedEvent* keyEvent = (XKeyPressedEvent*)&event;
+                bool isDown = (keyEvent->type == KeyPress);
+                bool wasDown = (keyEvent->type == KeyRelease);
+                
+                if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_W)) 
+                {
+                    
+                }
+                if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_A)) 
+                {
+                    
+                }
+                if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_S)) 
+                {
+                    
+                }
+                if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_D)) 
+                {
+                    
+                }
+                if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_Q)) 
+                {
+                    
+                }
+                if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_E)) 
+                {
+                    
+                }
+                if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_space)) 
+                {
+                    
+                }
+            } break;
+            
             // NOTE(Cel): Run this when WM_DELETE_WINDOW resolution fails.
             case DestroyNotify:
             {
@@ -209,7 +250,7 @@ LinuxDoEvents(LinuxDisplayInfo* displayInfo, Atom wmDelete)
 }
 
 internal int
-LinuxInitOpenGLWindow(LinuxDisplayInfo* displayInfo)
+LinuxInitOpenGLWindow(LinuxDisplayInfo* displayInfo, const char* title, int posX, int posY, int width, int height, int minWidth, int maxWidth, int minHeight, int maxHeight)
 {
     int majorGLX, minorGLX;
     glXQueryVersion(displayInfo->xDisplay, &majorGLX, &minorGLX);
@@ -254,7 +295,7 @@ LinuxInitOpenGLWindow(LinuxDisplayInfo* displayInfo)
     
     displayInfo->xVisualInfo = glXGetVisualFromFBConfig(displayInfo->xDisplay, fbc[0]);
     
-    if (LinuxCreateWindow(displayInfo, "Turbo Tusker", 0, 0, 800, 600, 400, 0, 300, 0) != 0)
+    if (LinuxCreateWindow(displayInfo, title, posX, posY, width, height, minWidth, maxWidth, minHeight, maxHeight) != 0)
     {
         fprintf(stderr, "Error creating window!\n");
         return 1;
@@ -274,7 +315,7 @@ LinuxInitOpenGLWindow(LinuxDisplayInfo* displayInfo)
     glxContext = glXCreateContextAttribsARB(displayInfo->xDisplay, fbc[0], 0, true, contextAttributes);
     if (glxContext == NULL)
     {
-        fprintf(stderr, "Unable to obtain glx context!\n");
+        fprintf(stderr, "Unable to obtain glx context! (likely glXCreateContextAttribsARB could not be loaded.)\n");
         return 1;
     }
     
@@ -327,7 +368,7 @@ int main(int argc, char** argv)
     // because GLX requires setting up window creating AND operating on window after it is created
     // the InitOpenGL function will ALSO create the window.
     LinuxLoadGlxFuncs();
-    if (LinuxInitOpenGLWindow(&displayInfo) != 0)
+    if (LinuxInitOpenGLWindow(&displayInfo, "Turbo Tusker", 0, 0, 800, 600, 400, 0, 300, 0) != 0)
     {
         fprintf(stderr, "Error initializing OpenGL!\n");
         return 1;
@@ -343,6 +384,10 @@ int main(int argc, char** argv)
     
     persist f32 testValue = 0;
     
+    // TODO(Cel): Where do I put this? lol its important for keyboard input,
+    // but I don't want to call it every frame, and I don't want to hide it
+    // in a function somewhere in case I need to remove it.
+    XAutoRepeatOff(displayInfo.xDisplay); 
     while (g_gameRunning)
     {
         LinuxDoEvents(&displayInfo, wmDelete);
@@ -396,11 +441,11 @@ int main(int argc, char** argv)
         
         glBegin(GL_TRIANGLES);
         
-        glColor3f(  1.0f,  testValue,  0.0f);
+        glColor3f(  testValue,  0.0f,  0.0f);
         glVertex3f(-0.5f, -0.5f,  0.0f);
         glColor3f(  0.0f,  testValue,  0.0f);
         glVertex3f( 0.5f, -0.5f,  0.0f);
-        glColor3f(  0.0f,  testValue,  1.0f);
+        glColor3f(  0.0f,  0.0f,  testValue);
         glVertex3f( 0.0f,  0.5f,  0.0f);
         
         glEnd();
