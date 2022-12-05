@@ -51,8 +51,9 @@ typedef double f64;
 
 typedef struct
 {
-    Display* xDisplay;
     Window xWindow;
+    XIC xInputContext;
+    Display* xDisplay;
     XVisualInfo* xVisualInfo;
     int xScreen;
     int xRootWindow;
@@ -121,7 +122,7 @@ LinuxSetSizeHint(LinuxDisplayInfo* displayInfo, int minWidth, int maxWidth, int 
 }
 
 internal int
-LinuxDisplayInit(LinuxDisplayInfo* displayInfo)
+LinuxDisplayInit(LinuxDisplayInfo* displayInfo, bool createVisualInfo)
 {
     displayInfo->xDisplay = XOpenDisplay(0);
     if (!displayInfo->xDisplay) 
@@ -133,20 +134,22 @@ LinuxDisplayInit(LinuxDisplayInfo* displayInfo)
     displayInfo->xRootWindow = DefaultRootWindow(displayInfo->xDisplay);
     
     // TODO(Cel): We cant use this because of OpenGL
-#if 0
-    int screenBitDepth = 24;
-    if (!XMatchVisualInfo(displayInfo->xDisplay, displayInfo->xScreen, screenBitDepth, TrueColor, &displayInfo->xVisualInfo))
+    if (createVisualInfo)
     {
-        fprintf(stderr, "This screen type is not supported!\n");
-        return 1;
+        int screenBitDepth = 24;
+        if (!XMatchVisualInfo(displayInfo->xDisplay, displayInfo->xScreen, screenBitDepth, TrueColor, displayInfo->xVisualInfo))
+        {
+            fprintf(stderr, "This screen type is not supported!\n");
+            return 1;
+        }
     }
-#endif
     return 0;
 }
 
 internal int
 LinuxCreateWindow(LinuxDisplayInfo* displayInfo, const char* title, int posX, int posY, int width, int height, int minWidth, int maxWidth, int minHeight, int maxHeight)
 {
+    // Window Attributes
     XSetWindowAttributes xWindowAttributes = {0};
     xWindowAttributes.border_pixel = BlackPixel(displayInfo->xDisplay, displayInfo->xScreen);
     xWindowAttributes.background_pixel = BlackPixel(displayInfo->xDisplay, displayInfo->xScreen);
@@ -155,6 +158,7 @@ LinuxCreateWindow(LinuxDisplayInfo* displayInfo, const char* title, int posX, in
     xWindowAttributes.event_mask = ExposureMask | StructureNotifyMask | KeyPressMask | KeyReleaseMask;
     u32 attributeMask = CWBackPixel | CWColormap | CWBorderPixel | CWEventMask;
     
+    // Window Creation
     displayInfo->xWindow = XCreateWindow(displayInfo->xDisplay, displayInfo->xRootWindow, posX, posY, width, height, 0, displayInfo->xVisualInfo->depth, InputOutput, displayInfo->xVisualInfo->visual, attributeMask, &xWindowAttributes);
     if (!displayInfo->xWindow) 
     {
@@ -162,10 +166,55 @@ LinuxCreateWindow(LinuxDisplayInfo* displayInfo, const char* title, int posX, in
         return 1;
     }
     
+    // Window Properties
     XStoreName(displayInfo->xDisplay, displayInfo->xWindow, title);
     LinuxSetSizeHint(displayInfo, minWidth, maxWidth, minHeight, maxHeight);
-    XMapWindow(displayInfo->xDisplay, displayInfo->xWindow);
     
+    // XInput Setup (not to be confused with windows Xinput.)
+    // TODO(Cel): Determine if this is better than default input setup for games.
+#if 0
+    XIM xInputMethod = XOpenIM(displayInfo->xDisplay, 0, 0, 0);
+    if (!xInputMethod)
+    {
+        fprintf(stderr, "Unable to obtain input method!\n");
+        return 1;
+    }
+    
+    XIMStyles* inputStyles = 0;
+    if (XGetIMValues(xInputMethod, XNQueryInputStyle, &inputStyles, NULL) || !inputStyles)
+    {
+        fprintf(stderr, "Unable to retrieve input styles!\n");
+        return 1;
+    }
+    
+    XIMStyle bestMatchStyle = 0;
+    for (int i = 0; i < inputStyles->count_styles; ++i)
+    {
+        XIMStyle currentStyle = inputStyles->supported_styles[i];
+        if (currentStyle == (XIMPreeditNothing | XIMStatusNothing) /* Meaning the input style is not special in any way. */)
+        {
+            bestMatchStyle = currentStyle;
+            break;
+        }
+    }
+    XFree(inputStyles);
+    
+    if (!bestMatchStyle)
+    {
+        fprintf(stderr, "Unable to find matching input style!\n");
+        return 1;
+    }
+    
+    displayInfo->xInputContext = XCreateIC(xInputMethod, XNInputStyle, bestMatchStyle, XNClientWindow, displayInfo->xWindow, XNFocusWindow, displayInfo->xWindow, NULL);
+    if (!displayInfo->xInputContext)
+    {
+        fprintf(stderr, "Unable to create input context!\n");
+        return 1;
+    }
+#endif 
+    // Display Window
+    XMapWindow(displayInfo->xDisplay, displayInfo->xWindow);
+    // Apply Changes
     XFlush(displayInfo->xDisplay);
     return 0;
 }
@@ -179,14 +228,12 @@ LinuxDoEvents(LinuxDisplayInfo* displayInfo, Atom wmDelete)
         XNextEvent(displayInfo->xDisplay, &event);
         switch (event.type)
         {
-            // TODO(Cel): Becuase we are running this game from gamepad-only, this keyboard
-            // input should only be for debug builds of game.
-            case KeyPress:  
+            // TODO(Cel): Make this work, the way this is set up currently is sub-optimal. 
+            // Might wanna check out this function: https://tronche.com/gui/x/xlib/input/XQueryKeymap.html
+            case KeyPress: 
             case KeyRelease:
             {
                 XKeyPressedEvent* keyEvent = (XKeyPressedEvent*)&event;
-                bool isDown = (keyEvent->type == KeyPress);
-                bool wasDown = (keyEvent->type == KeyRelease);
                 
                 if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_W)) 
                 {
@@ -216,6 +263,7 @@ LinuxDoEvents(LinuxDisplayInfo* displayInfo, Atom wmDelete)
                 {
                     
                 }
+                
             } break;
             
             // NOTE(Cel): Run this when WM_DELETE_WINDOW resolution fails.
@@ -357,7 +405,7 @@ int main(int argc, char** argv)
 {
     int width = 800, height = 600;
     LinuxDisplayInfo displayInfo = {0};
-    if (LinuxDisplayInit(&displayInfo) != 0)
+    if (LinuxDisplayInit(&displayInfo, false) != 0)
     {
         fprintf(stderr, "Error creating display info!\n");
         return 1;
@@ -377,8 +425,8 @@ int main(int argc, char** argv)
     Atom wmDelete = LinuxGetCloseMessage(&displayInfo);
     
     int gamepad = open("/dev/input/by-id/usb-Microsoft_Controller_30394E4F30343234353133303133-event-joystick", O_RDONLY | O_NONBLOCK);
-    int gamepadStickLeftX = 0;
-    int gamepadStickLeftY = 0;
+    f32 gamepadStickLeftX = 0;
+    f32 gamepadStickLeftY = 0;
     bool gamepadButtonA = 0;
     bool gamepadButtonB = 0;
     
@@ -421,16 +469,10 @@ int main(int argc, char** argv)
         }
         
         if (gamepadButtonA != 0 || gamepadButtonB != 0)
-            fprintf(stderr, "A: %d B: %d Left stick: %d, %d\n", gamepadButtonA, gamepadButtonB, gamepadStickLeftX, gamepadStickLeftY);
+            fprintf(stderr, "A: %d B: %d Left stick: %f, %f\n", gamepadButtonA, gamepadButtonB, gamepadStickLeftX, gamepadStickLeftY);
         
-        if (gamepadButtonA)
-        {
-            testValue+=.01f;
-        }
-        else if (gamepadButtonB)
-        {
-            testValue-=.01f;
-        }
+        testValue = gamepadStickLeftX / 32000;
+        fprintf(stderr, "%f\n", gamepadStickLeftX / 32000);
         
         glClearColor(0.2f, 0.3f, 0.3f, 1.f);
         glClear(GL_COLOR_BUFFER_BIT);
