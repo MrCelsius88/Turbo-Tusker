@@ -382,12 +382,8 @@ int main(int argc, char** argv)
     bool gamepadButtonA = 0;
     bool gamepadButtonB = 0;
     
-    persist f32 testValue = 0;
+    f32 testValue = 0;
     
-    // TODO(Cel): Where do I put this? lol its important for keyboard input,
-    // but I don't want to call it every frame, and I don't want to hide it
-    // in a function somewhere in case I need to remove it.
-    XAutoRepeatOff(displayInfo.xDisplay); 
     while (g_gameRunning)
     {
         LinuxDoEvents(&displayInfo, wmDelete);
