@@ -18,17 +18,30 @@
 #include <X11/Xatom.h>
 #include <GL/glx.h>
 
-// Special thanks to these absolute chads for Xlib help:
+#include <alsa/asoundlib.h>
+
+// All of this would not be possible without Handmade Hero and
+// https://yakvi.github.io/handmade-hero-notes/html/day7.html
+
+// Special thanks to this absolute chad for Xlib help:
 // https://handmade.network/forums/articles/t/2834-tutorial_a_tour_through_xlib_and_related_technologies
-// https://github.com/gamedevtech/X11OpenGLWindow
 
 // Glx loading resources:
 // https://registry.khronos.org/OpenGL/extensions/ARB/GLX_ARB_create_context.txt
+// https://github.com/gamedevtech/X11OpenGLWindow
 
 // Gamepad input resources used:
 // https://docs.kernel.org/input/input.html
+// https://github.com/torvalds/linux/blob/master/include/uapi/linux/input-event-codes.h
 // https://github.com/MysteriousJ/Joystick-Input-Examples/blob/main/src/evdev.cpp
 // https://handmade.network/forums/t/3673-modern_way_to_read_gamepad_input_with_c_on_linux
+
+// Audio (ALSA) resources used:
+// https://www.linuxjournal.com/article/6735
+// https://soundprogramming.net/programming/alsa-tutorial-1-initialization/
+
+// PNG loading:
+// https://www.youtube.com/watch?v=lkEWbIUEuN0&list=PLEMXAbCVnmY5y4dSkKf297tJqwMxJOk7e
 
 /* TODO Known bugs: 
 - Using wireless bluetooth controllers.
@@ -52,7 +65,6 @@ typedef double f64;
 typedef struct
 {
     Window xWindow;
-    XIC xInputContext;
     Display* xDisplay;
     XVisualInfo* xVisualInfo;
     int xScreen;
@@ -75,6 +87,18 @@ LinuxLoadGlxFuncs(void)
 {
     glXCreateContextAttribsARB = (glx_create_context_attribs_arb*)glXGetProcAddressARB("glXCreateContextAttribsARB");
     if (!glXCreateContextAttribsARB) { glXCreateContextAttribsARB = glXCreateContextAttribsARBStub; }
+}
+
+internal Atom
+LinuxGetCloseMessage(LinuxDisplayInfo* displayInfo)
+{
+    Atom wmDelete = XInternAtom(displayInfo->xDisplay, "WM_DELETE_WINDOW", False);
+    if (!XSetWMProtocols(displayInfo->xDisplay, displayInfo->xWindow, &wmDelete, 1))
+    {
+        fprintf(stderr, "Unable to register WM_DELETE_WINDOW"); 
+    }
+    
+    return wmDelete;
 }
 
 internal bool
@@ -147,6 +171,49 @@ LinuxDisplayInit(LinuxDisplayInfo* displayInfo, bool createVisualInfo)
 }
 
 internal int
+LinuxInitALSA(u32 samplesPerSecond, u32 bufferSize)
+{
+    int error = 0;
+    
+    // NOTE(Cel): Open interface for playback.
+    snd_pcm_t* soundDevice = 0;
+    error = snd_pcm_open(&soundDevice, "default", SND_PCM_STREAM_PLAYBACK, 0);
+    if (error != 0)
+    {
+        fprintf(stderr, "Unable to get sound device! Error: %s\n", snd_strerror(error));
+        return 1;
+    }
+    
+    // NOTE(Cel): Set hardware parameters.
+    snd_pcm_hw_params_t* hardwareParams;
+    error = snd_pcm_hw_params_malloc(&hardwareParams);
+    if (error != 0)
+    {
+        fprintf(stderr, "Unable to allocate hardware parameters! Error: %s\n", snd_strerror(error));
+        return 1;
+    }
+    
+    snd_pcm_hw_params_any(soundDevice, hardwareParams);
+    snd_pcm_hw_params_set_access(soundDevice, hardwareParams, SND_PCM_ACCESS_RW_INTERLEAVED);
+    snd_pcm_hw_params_set_format(soundDevice, hardwareParams, SND_PCM_FORMAT_S16_LE);
+    snd_pcm_hw_params_set_channels(soundDevice, hardwareParams, 2);
+    snd_pcm_hw_params_set_rate(soundDevice, hardwareParams, samplesPerSecond, 0);
+    snd_pcm_hw_params_set_buffer_size(soundDevice, hardwareParams, bufferSize);
+    
+    error = snd_pcm_hw_params(soundDevice, hardwareParams);
+    snd_pcm_hw_params_free(hardwareParams);
+    
+    if (error != 0)
+    {
+        fprintf(stderr, "Unable to send hardware parameters! Error: %s\n", snd_strerror(error));
+        return 1;
+    }
+    // NOTE(Cel): write PCM data (playback).
+    
+    return 0;
+}
+
+internal int
 LinuxCreateWindow(LinuxDisplayInfo* displayInfo, const char* title, int posX, int posY, int width, int height, int minWidth, int maxWidth, int minHeight, int maxHeight)
 {
     // Window Attributes
@@ -170,48 +237,6 @@ LinuxCreateWindow(LinuxDisplayInfo* displayInfo, const char* title, int posX, in
     XStoreName(displayInfo->xDisplay, displayInfo->xWindow, title);
     LinuxSetSizeHint(displayInfo, minWidth, maxWidth, minHeight, maxHeight);
     
-    // XInput Setup (not to be confused with windows Xinput.)
-    // TODO(Cel): Determine if this is better than default input setup for games.
-#if 0
-    XIM xInputMethod = XOpenIM(displayInfo->xDisplay, 0, 0, 0);
-    if (!xInputMethod)
-    {
-        fprintf(stderr, "Unable to obtain input method!\n");
-        return 1;
-    }
-    
-    XIMStyles* inputStyles = 0;
-    if (XGetIMValues(xInputMethod, XNQueryInputStyle, &inputStyles, NULL) || !inputStyles)
-    {
-        fprintf(stderr, "Unable to retrieve input styles!\n");
-        return 1;
-    }
-    
-    XIMStyle bestMatchStyle = 0;
-    for (int i = 0; i < inputStyles->count_styles; ++i)
-    {
-        XIMStyle currentStyle = inputStyles->supported_styles[i];
-        if (currentStyle == (XIMPreeditNothing | XIMStatusNothing) /* Meaning the input style is not special in any way. */)
-        {
-            bestMatchStyle = currentStyle;
-            break;
-        }
-    }
-    XFree(inputStyles);
-    
-    if (!bestMatchStyle)
-    {
-        fprintf(stderr, "Unable to find matching input style!\n");
-        return 1;
-    }
-    
-    displayInfo->xInputContext = XCreateIC(xInputMethod, XNInputStyle, bestMatchStyle, XNClientWindow, displayInfo->xWindow, XNFocusWindow, displayInfo->xWindow, NULL);
-    if (!displayInfo->xInputContext)
-    {
-        fprintf(stderr, "Unable to create input context!\n");
-        return 1;
-    }
-#endif 
     // Display Window
     XMapWindow(displayInfo->xDisplay, displayInfo->xWindow);
     // Apply Changes
@@ -219,87 +244,11 @@ LinuxCreateWindow(LinuxDisplayInfo* displayInfo, const char* title, int posX, in
     return 0;
 }
 
-internal void
-LinuxDoEvents(LinuxDisplayInfo* displayInfo, Atom wmDelete)
-{
-    XEvent event;
-    if (XPending(displayInfo->xDisplay) > 0)
-    {
-        XNextEvent(displayInfo->xDisplay, &event);
-        switch (event.type)
-        {
-            // TODO(Cel): Make this work, the way this is set up currently is sub-optimal. 
-            // Might wanna check out this function: https://tronche.com/gui/x/xlib/input/XQueryKeymap.html
-            case KeyPress: 
-            case KeyRelease:
-            {
-                XKeyPressedEvent* keyEvent = (XKeyPressedEvent*)&event;
-                
-                if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_W)) 
-                {
-                    
-                }
-                if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_A)) 
-                {
-                    
-                }
-                if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_S)) 
-                {
-                    
-                }
-                if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_D)) 
-                {
-                    
-                }
-                if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_Q)) 
-                {
-                    
-                }
-                if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_E)) 
-                {
-                    
-                }
-                if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_space)) 
-                {
-                    
-                }
-                
-            } break;
-            
-            // NOTE(Cel): Run this when WM_DELETE_WINDOW resolution fails.
-            case DestroyNotify:
-            {
-                XDestroyWindowEvent* destroyEvent = (XDestroyWindowEvent*)&event;
-                if (destroyEvent->window == displayInfo->xWindow)
-                {
-                    g_gameRunning = false;
-                }
-            } break;
-            
-            case ConfigureNotify:
-            {
-                XConfigureEvent* configureEvent = (XConfigureEvent*)&event;
-                if (configureEvent->window == displayInfo->xWindow)
-                {
-                    glViewport(0, 0, configureEvent->width, configureEvent->height);
-                }
-            } break;
-            
-            case ClientMessage:
-            {
-                if (event.xclient.data.l[0] == wmDelete)
-                {
-                    g_gameRunning = false;
-                }
-            } break;
-            
-        }
-    }
-}
-
 internal int
 LinuxInitOpenGLWindow(LinuxDisplayInfo* displayInfo, const char* title, int posX, int posY, int width, int height, int minWidth, int maxWidth, int minHeight, int maxHeight)
 {
+    LinuxLoadGlxFuncs();
+    
     int majorGLX, minorGLX;
     glXQueryVersion(displayInfo->xDisplay, &majorGLX, &minorGLX);
     // TODO(Cel): Maybe bump this down to version 1.2...
@@ -389,21 +338,88 @@ LinuxInitOpenGLWindow(LinuxDisplayInfo* displayInfo, const char* title, int posX
     return 0;
 }
 
-internal Atom
-LinuxGetCloseMessage(LinuxDisplayInfo* displayInfo)
+internal void
+LinuxDoEvents(LinuxDisplayInfo* displayInfo, Atom wmDelete)
 {
-    Atom wmDelete = XInternAtom(displayInfo->xDisplay, "WM_DELETE_WINDOW", False);
-    if (!XSetWMProtocols(displayInfo->xDisplay, displayInfo->xWindow, &wmDelete, 1))
+    XEvent event;
+    if (XPending(displayInfo->xDisplay) > 0)
     {
-        fprintf(stderr, "Unable to register WM_DELETE_WINDOW"); 
+        XNextEvent(displayInfo->xDisplay, &event);
+        switch (event.type)
+        {
+            // TODO(Cel): Make this work, the way this is set up currently is sub-optimal. 
+            // Might wanna check out this function: https://tronche.com/gui/x/xlib/input/XQueryKeymap.html
+            case KeyPress: 
+            case KeyRelease:
+            {
+                XKeyPressedEvent* keyEvent = (XKeyPressedEvent*)&event;
+                
+                if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_W)) 
+                {
+                    
+                }
+                if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_A)) 
+                {
+                    
+                }
+                if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_S)) 
+                {
+                    
+                }
+                if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_D)) 
+                {
+                    
+                }
+                if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_Q)) 
+                {
+                    
+                }
+                if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_E)) 
+                {
+                    
+                }
+                if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_space)) 
+                {
+                    
+                }
+                
+            } break;
+            
+            // NOTE(Cel): Run this when WM_DELETE_WINDOW resolution fails.
+            case DestroyNotify:
+            {
+                XDestroyWindowEvent* destroyEvent = (XDestroyWindowEvent*)&event;
+                if (destroyEvent->window == displayInfo->xWindow)
+                {
+                    g_gameRunning = false;
+                }
+            } break;
+            
+            case ConfigureNotify:
+            {
+                XConfigureEvent* configureEvent = (XConfigureEvent*)&event;
+                if (configureEvent->window == displayInfo->xWindow)
+                {
+                    glViewport(0, 0, configureEvent->width, configureEvent->height);
+                }
+            } break;
+            
+            case ClientMessage:
+            {
+                if (event.xclient.data.l[0] == wmDelete)
+                {
+                    g_gameRunning = false;
+                }
+            } break;
+            
+        }
     }
-    
-    return wmDelete;
 }
 
 int main(int argc, char** argv)
 {
     int width = 800, height = 600;
+    
     LinuxDisplayInfo displayInfo = {0};
     if (LinuxDisplayInit(&displayInfo, false) != 0)
     {
@@ -415,14 +431,20 @@ int main(int argc, char** argv)
     // NOTE(Cel): LinuxInitOpenGL works different than Casey's Win32InitOpenGL
     // because GLX requires setting up window creating AND operating on window after it is created
     // the InitOpenGL function will ALSO create the window.
-    LinuxLoadGlxFuncs();
     if (LinuxInitOpenGLWindow(&displayInfo, "Turbo Tusker", 0, 0, 800, 600, 400, 0, 300, 0) != 0)
     {
         fprintf(stderr, "Error initializing OpenGL!\n");
         return 1;
     }
-    
     Atom wmDelete = LinuxGetCloseMessage(&displayInfo);
+    
+    u32 samplesPerSecond = 48000;
+    u32 bufferSize = 2 * samplesPerSecond;
+    if (LinuxInitALSA(samplesPerSecond, bufferSize) != 0)
+    {
+        fprintf(stderr, "Error initializing ALSA!\n");
+        return 1;
+    }
     
     int gamepad = open("/dev/input/by-id/usb-Microsoft_Controller_30394E4F30343234353133303133-event-joystick", O_RDONLY | O_NONBLOCK);
     f32 gamepadStickLeftX = 0;
@@ -470,9 +492,7 @@ int main(int argc, char** argv)
         
         if (gamepadButtonA != 0 || gamepadButtonB != 0)
             fprintf(stderr, "A: %d B: %d Left stick: %f, %f\n", gamepadButtonA, gamepadButtonB, gamepadStickLeftX, gamepadStickLeftY);
-        
         testValue = gamepadStickLeftX / 32000;
-        fprintf(stderr, "%f\n", gamepadStickLeftX / 32000);
         
         glClearColor(0.2f, 0.3f, 0.3f, 1.f);
         glClear(GL_COLOR_BUFFER_BIT);
