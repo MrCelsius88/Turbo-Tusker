@@ -6,6 +6,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include <math.h> // Im so lazy lmao
+
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
@@ -39,6 +41,8 @@
 // Audio (ALSA) resources used:
 // https://www.linuxjournal.com/article/6735
 // https://soundprogramming.net/programming/alsa-tutorial-1-initialization/
+// https://alexvia.com/post/003_alsa_playback/#what-next
+// https://github.com/AlexViaColl/alsa-playback/blob/main/main.c
 
 // PNG loading:
 // https://www.youtube.com/watch?v=lkEWbIUEuN0&list=PLEMXAbCVnmY5y4dSkKf297tJqwMxJOk7e
@@ -50,6 +54,8 @@
 #define internal static
 #define global static
 #define persist static
+
+#define PI 3.14159265358979323846
 
 typedef int8_t s8;
 typedef uint8_t u8;
@@ -70,6 +76,17 @@ typedef struct
     int xScreen;
     int xRootWindow;
 } LinuxDisplayInfo;
+
+typedef struct
+{
+    snd_pcm_t* soundDevice;
+    int nChannels;
+    int samplesPerSecond;
+    int bytesPerSample;
+    int bufferSizeInSamples;
+    int bufferSizeInBytes;
+    u64 periodSize;
+} LinuxAudioData;
 
 global bool g_gameRunning = true;
 
@@ -171,13 +188,13 @@ LinuxDisplayInit(LinuxDisplayInfo* displayInfo, bool createVisualInfo)
 }
 
 internal int
-LinuxInitALSA(u32 samplesPerSecond, u32 bufferSize)
+LinuxInitALSA(LinuxAudioData* audioData)
 {
     int error = 0;
+    char* deviceName = "default";
     
     // NOTE(Cel): Open interface for playback.
-    snd_pcm_t* soundDevice = 0;
-    error = snd_pcm_open(&soundDevice, "default", SND_PCM_STREAM_PLAYBACK, 0);
+    error = snd_pcm_open(&audioData->soundDevice, deviceName, SND_PCM_STREAM_PLAYBACK, 0);
     if (error != 0)
     {
         fprintf(stderr, "Unable to get sound device! Error: %s\n", snd_strerror(error));
@@ -186,29 +203,23 @@ LinuxInitALSA(u32 samplesPerSecond, u32 bufferSize)
     
     // NOTE(Cel): Set hardware parameters.
     snd_pcm_hw_params_t* hardwareParams;
-    error = snd_pcm_hw_params_malloc(&hardwareParams);
-    if (error != 0)
-    {
-        fprintf(stderr, "Unable to allocate hardware parameters! Error: %s\n", snd_strerror(error));
-        return 1;
-    }
+    snd_pcm_hw_params_alloca(&hardwareParams);
     
-    snd_pcm_hw_params_any(soundDevice, hardwareParams);
-    snd_pcm_hw_params_set_access(soundDevice, hardwareParams, SND_PCM_ACCESS_RW_INTERLEAVED);
-    snd_pcm_hw_params_set_format(soundDevice, hardwareParams, SND_PCM_FORMAT_S16_LE);
-    snd_pcm_hw_params_set_channels(soundDevice, hardwareParams, 2);
-    snd_pcm_hw_params_set_rate(soundDevice, hardwareParams, samplesPerSecond, 0);
-    snd_pcm_hw_params_set_buffer_size(soundDevice, hardwareParams, bufferSize);
+    snd_pcm_hw_params_any(audioData->soundDevice, hardwareParams);
+    snd_pcm_hw_params_set_access(audioData->soundDevice, hardwareParams, SND_PCM_ACCESS_RW_INTERLEAVED);
+    snd_pcm_hw_params_set_format(audioData->soundDevice, hardwareParams, SND_PCM_FORMAT_S16_LE);
+    snd_pcm_hw_params_set_channels(audioData->soundDevice, hardwareParams, audioData->nChannels);
+    snd_pcm_hw_params_set_rate(audioData->soundDevice, hardwareParams, audioData->samplesPerSecond, 0);
+    snd_pcm_hw_params_set_buffer_size(audioData->soundDevice, hardwareParams, audioData->bufferSizeInSamples);
     
-    error = snd_pcm_hw_params(soundDevice, hardwareParams);
-    snd_pcm_hw_params_free(hardwareParams);
-    
+    error = snd_pcm_hw_params(audioData->soundDevice, hardwareParams);
     if (error != 0)
     {
         fprintf(stderr, "Unable to send hardware parameters! Error: %s\n", snd_strerror(error));
         return 1;
     }
-    // NOTE(Cel): write PCM data (playback).
+    
+    snd_pcm_hw_params_get_period_size(hardwareParams, &audioData->periodSize, 0);
     
     return 0;
 }
@@ -438,21 +449,29 @@ int main(int argc, char** argv)
     }
     Atom wmDelete = LinuxGetCloseMessage(&displayInfo);
     
-    u32 samplesPerSecond = 48000;
-    u32 bufferSize = 2 * samplesPerSecond;
-    if (LinuxInitALSA(samplesPerSecond, bufferSize) != 0)
+    LinuxAudioData audioData = {0};
+    audioData.samplesPerSecond = 48000;
+    audioData.nChannels = 2;
+    // NOTE(Cel): One second buffer
+    audioData.bytesPerSample = sizeof(s16) * audioData.nChannels; 
+    audioData.bufferSizeInSamples = audioData.samplesPerSecond;
+    audioData.bufferSizeInBytes = audioData.bufferSizeInSamples * audioData.bytesPerSample;
+    if (LinuxInitALSA(&audioData) != 0)
     {
         fprintf(stderr, "Error initializing ALSA!\n");
         return 1;
     }
+    int toneHz = 256;
+    int toneVolume = 3000;
+    int squareWavePeriod = audioData.samplesPerSecond / toneHz;
+    int halfSquareWavePeriod = squareWavePeriod / 2;
+    int squareWaveCounter = 0;
     
     int gamepad = open("/dev/input/by-id/usb-Microsoft_Controller_30394E4F30343234353133303133-event-joystick", O_RDONLY | O_NONBLOCK);
     f32 gamepadStickLeftX = 0;
     f32 gamepadStickLeftY = 0;
     bool gamepadButtonA = 0;
     bool gamepadButtonB = 0;
-    
-    f32 testValue = 0;
     
     while (g_gameRunning)
     {
@@ -490,27 +509,32 @@ int main(int argc, char** argv)
             }
         }
         
-        if (gamepadButtonA != 0 || gamepadButtonB != 0)
-            fprintf(stderr, "A: %d B: %d Left stick: %f, %f\n", gamepadButtonA, gamepadButtonB, gamepadStickLeftX, gamepadStickLeftY);
-        testValue = gamepadStickLeftX / 32000;
+        // NOTE(Cel): ALSA test
+        
+        s16 squareWaveBuffer[audioData.bufferSizeInBytes];
+        for (int i = 0; i < audioData.bufferSizeInBytes; ++i)
+        {
+            squareWaveBuffer[i] = toneVolume * sinf(((f32)i / (f32)audioData.samplesPerSecond) * 2 * PI * toneHz);
+        }
+        snd_pcm_writei(audioData.soundDevice, squareWaveBuffer, audioData.bufferSizeInSamples);
         
         glClearColor(0.2f, 0.3f, 0.3f, 1.f);
         glClear(GL_COLOR_BUFFER_BIT);
         
         glBegin(GL_TRIANGLES);
         
-        glColor3f(  testValue,  0.0f,  0.0f);
+        glColor3f(  1.f,  0.0f,  0.0f);
         glVertex3f(-0.5f, -0.5f,  0.0f);
-        glColor3f(  0.0f,  testValue,  0.0f);
+        glColor3f(  0.0f,  1.f,  0.0f);
         glVertex3f( 0.5f, -0.5f,  0.0f);
-        glColor3f(  0.0f,  0.0f,  testValue);
+        glColor3f(  0.0f,  0.0f,  1.f);
         glVertex3f( 0.0f,  0.5f,  0.0f);
         
         glEnd();
         
         glXSwapBuffers(displayInfo.xDisplay, displayInfo.xWindow);
-        
     }
+    snd_pcm_close(audioData.soundDevice);
     
     return 0;
 }
