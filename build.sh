@@ -1,3 +1,5 @@
+#!/bin/bash
+
 rm -r build
 mkdir -p build
 pushd build

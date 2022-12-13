@@ -1,4 +1,5 @@
 // NOTE(Cel): CRT for now... :)
+#include <asm-generic/errno-base.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -20,6 +21,8 @@
 #include <X11/Xatom.h>
 #include <GL/glx.h>
 
+// TODO(Cel): I'm not gonna pretend like I know what im doing with audio.
+// i'll throw in the towel here, but i'll be back >:) (prob when I have multithreading).
 #include <alsa/asoundlib.h>
 
 // None of this would be possible without Handmade Hero and
@@ -54,6 +57,9 @@
 #define internal static
 #define global static
 #define persist static
+
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
+#define MAX(a, b) (((a) > (b)) ? (a) : (b))
 
 #define M_PI 3.14159265358979323846
 #define FPS 30
@@ -183,7 +189,7 @@ LinuxDisplayInit(LinuxDisplayInfo* displayInfo, bool createVisualInfo)
     }
     displayInfo->xScreen = DefaultScreen(displayInfo->xDisplay);
     displayInfo->xRootWindow = DefaultRootWindow(displayInfo->xDisplay);
-    
+
     // TODO(Cel): We cant use this because of OpenGL
     if (createVisualInfo)
     {
@@ -432,7 +438,7 @@ int main(int argc, char** argv)
     // NOTE(Cel): LinuxInitOpenGL works different than Casey's Win32InitOpenGL
     // because GLX requires setting up window creating AND operating on window after it is created
     // the InitOpenGL function will ALSO create the window.
-    if (LinuxInitOpenGLWindow(&displayInfo, "Turbo Tusker", 0, 0, 800, 600, 400, 0, 300, 0) != 0)
+    if (LinuxInitOpenGLWindow(&displayInfo, "Turbo Tusker", 0, 0, width, height, 400, 0, 300, 0) != 0)
     {
         fprintf(stderr, "Error initializing OpenGL!\n");
         return 1;
@@ -443,7 +449,7 @@ int main(int argc, char** argv)
     audioData.nChannels = 2;
     audioData.samplesPerSecond = 48000;
     audioData.bytesPerSample = sizeof(s16) * audioData.nChannels;
-    audioData.bufferSizeFrames = audioData.samplesPerSecond;
+    audioData.bufferSizeFrames = audioData.samplesPerSecond * 2;
     audioData.bufferSizeBytes = audioData.bufferSizeFrames * audioData.bytesPerSample;
     LinuxInitAudio(&audioData);
     
@@ -452,9 +458,7 @@ int main(int argc, char** argv)
     f32 gamepadStickLeftY = 0;
     bool gamepadButtonA = 0;
     bool gamepadButtonB = 0;
-    
-    s16 audioBuffer[audioData.bufferSizeBytes];
-    
+
     while (g_gameRunning)
     {
         LinuxDoEvents(&displayInfo, wmDelete);
@@ -490,41 +494,9 @@ int main(int argc, char** argv)
                 }
             }
         }
-        
-        // NOTE(Cel): Audio Test
-        // NOTE(Cel): The program will wait for snd_pcm_writei to finish, so in order to
-        // continue program execution we can either run this from a seperate thread, 
-        // or to avoid complexity, only write 1 frame worth of data.
-        int toneHz = 256;
-        int toneVolume = 3000;
-        u32 runningSampleIndex = 0;
-        s16* currentSample = audioBuffer;
-        
-        snd_pcm_sframes_t avalible, delay;
-        snd_pcm_avail_delay(audioData.handle, &avalible, &delay);
-        int samplesPerFrame = audioData.samplesPerSecond / 30.f;
-        samplesPerFrame -= delay;
-        
-        if (samplesPerFrame > avalible)
-        {
-            samplesPerFrame = avalible;
-        }
-        
-        for (int i = 0; i < audioData.bufferSizeFrames; ++i)
-        {
-            f32 t = 2.f * M_PI * (f32)runningSampleIndex / ((f32)audioData.samplesPerSecond / (f32)toneHz);
-            f32 sineValue = sinf(t);
-            s16 sampleValue = (s16)(sineValue * toneVolume);
-            
-            *currentSample++ = sampleValue;
-            *currentSample++ = sampleValue;
-            
-            runningSampleIndex++;
-        }
-        
-        snd_pcm_writei(audioData.handle, audioBuffer, samplesPerFrame);
-        
+
         glClearColor(0.2f, 0.3f, 0.3f, 1.f);
+
         glClear(GL_COLOR_BUFFER_BIT);
         
         glBegin(GL_TRIANGLES);
