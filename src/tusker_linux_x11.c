@@ -1,5 +1,6 @@
 // NOTE(Cel): CRT for now... :)
 #include <asm-generic/errno-base.h>
+#include <bits/time.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -15,6 +16,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <linux/input.h>
+#include <time.h>
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -23,7 +25,6 @@
 
 // TODO(Cel): I'm not gonna pretend like I know what im doing with audio.
 // i'll throw in the towel here, but i'll be back >:) (prob when I have multithreading).
-#include <alsa/asoundlib.h>
 
 // None of this would be possible without Handmade Hero and
 // https://yakvi.github.io/handmade-hero-notes/html/day7.html
@@ -61,6 +62,8 @@
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
 
+#define LINUX_CLOCK CLOCK_MONOTONIC
+
 #define M_PI 3.14159265358979323846
 #define FPS 30
 
@@ -83,16 +86,6 @@ typedef struct
     int xScreen;
     int xRootWindow;
 } LinuxDisplayInfo;
-
-typedef struct
-{
-    snd_pcm_t* handle;
-    int nChannels;
-    int samplesPerSecond;
-    int bytesPerSample;
-    int bufferSizeFrames;
-    int bufferSizeBytes;
-} LinuxAudioData;
 
 global bool g_gameRunning = true;
 
@@ -124,16 +117,6 @@ LinuxGetCloseMessage(LinuxDisplayInfo* displayInfo)
     return wmDelete;
 }
 
-internal void
-LinuxCheckAlsa(int retValue)
-{
-    if (retValue < 0)
-    {
-        fprintf(stderr, "ALSA Error: %s\n", snd_strerror(retValue));
-        exit(1);
-    }
-}
-
 internal bool
 LinuxCheckOpenGLExtension(const char* extList, const char* extension)
 {
@@ -161,6 +144,25 @@ LinuxCheckOpenGLExtension(const char* extList, const char* extension)
     }
     
     return false;
+}
+
+// NOTE(Cel): SDL2 source was rlly helpful here:
+// https://github.com/zielmicha/SDL2/blob/master/src/timer/unix/SDL_systimer.c
+internal u64
+LinuxGetPerformaceCounter(void)
+{
+    u64 ticks;
+    struct timespec currentTime;
+    clock_gettime(LINUX_CLOCK, &currentTime);
+    ticks = currentTime.tv_sec * 1000000000;
+    ticks += currentTime.tv_nsec;
+    return ticks;
+}
+
+internal u64
+LinuxGetPerformaceFrequency(void)
+{
+    return 1000000000;
 }
 
 internal void
@@ -201,23 +203,6 @@ LinuxDisplayInit(LinuxDisplayInfo* displayInfo, bool createVisualInfo)
         }
     }
     return 0;
-}
-
-internal void
-LinuxInitAudio(LinuxAudioData* audioData)
-{
-    LinuxCheckAlsa(snd_pcm_open(&audioData->handle, "default", SND_PCM_STREAM_PLAYBACK, 0));
-    
-    snd_pcm_hw_params_t* hwParams;
-    snd_pcm_hw_params_alloca(&hwParams);
-    
-    LinuxCheckAlsa(snd_pcm_hw_params_any(audioData->handle, hwParams));
-    LinuxCheckAlsa(snd_pcm_hw_params_set_access(audioData->handle, hwParams, SND_PCM_ACCESS_RW_INTERLEAVED));
-    LinuxCheckAlsa(snd_pcm_hw_params_set_format(audioData->handle, hwParams, SND_PCM_FORMAT_S16_LE));
-    LinuxCheckAlsa(snd_pcm_hw_params_set_channels(audioData->handle, hwParams, audioData->nChannels));
-    LinuxCheckAlsa(snd_pcm_hw_params_set_rate(audioData->handle, hwParams, audioData->samplesPerSecond, 0));
-    LinuxCheckAlsa(snd_pcm_hw_params_set_buffer_size(audioData->handle, hwParams, audioData->bufferSizeFrames));
-    LinuxCheckAlsa(snd_pcm_hw_params(audioData->handle, hwParams));
 }
 
 internal int
@@ -445,20 +430,14 @@ int main(int argc, char** argv)
     }
     Atom wmDelete = LinuxGetCloseMessage(&displayInfo);
     
-    LinuxAudioData audioData = {0};
-    audioData.nChannels = 2;
-    audioData.samplesPerSecond = 48000;
-    audioData.bytesPerSample = sizeof(s16) * audioData.nChannels;
-    audioData.bufferSizeFrames = audioData.samplesPerSecond * 2;
-    audioData.bufferSizeBytes = audioData.bufferSizeFrames * audioData.bytesPerSample;
-    LinuxInitAudio(&audioData);
-    
     int gamepad = open("/dev/input/by-id/usb-Microsoft_Controller_30394E4F30343234353133303133-event-joystick", O_RDONLY | O_NONBLOCK);
     f32 gamepadStickLeftX = 0;
     f32 gamepadStickLeftY = 0;
     bool gamepadButtonA = 0;
     bool gamepadButtonB = 0;
 
+    u64 performaceFrequency = LinuxGetPerformaceFrequency();
+    u64 lastCounter = LinuxGetPerformaceCounter();
     while (g_gameRunning)
     {
         LinuxDoEvents(&displayInfo, wmDelete);
@@ -511,7 +490,18 @@ int main(int argc, char** argv)
         glEnd();
         
         glXSwapBuffers(displayInfo.xDisplay, displayInfo.xWindow);
+
+        u64 currentCounter = LinuxGetPerformaceCounter();
+
+        u64 counterElapsed = currentCounter - lastCounter;
+        f32 msPerFrame = ((f32)(1000.f * counterElapsed) / (f32)performaceFrequency);
+        f32 framesPerSecond = (f32)performaceFrequency / (f32)counterElapsed;
+
+        fprintf(stderr, "ms/frame: %.02fms | f/s: %.02f\n", msPerFrame, framesPerSecond);
+
+        lastCounter = currentCounter;
     }
-    snd_pcm_close(audioData.handle);
+
+
     return 0;
 }
