@@ -1,3 +1,56 @@
+/*
+  TODO(Cel): The big platform layer TODO list.
+  (Taken from Casey's TODO list.)
+
+  - Saved game locations
+  - Getting a handle to our own executable file
+  - Asset loading path
+  - Multithreading (launch a thread)
+  - Raw Input (support for multiple keyboards)
+  - Sleep/timeBeginPeriod
+  - ClipCursor() (for multi-monitor support)
+  - Fullscreen support
+  - Get keyboard layout (for French keyboards, international WASD support)
+*/
+
+// TODO(Cel): I'm not gonna pretend like I know what im doing with audio.
+// i'll throw in the towel here, but i'll be back >:) (prob when I have multithreading).
+
+// None of this would be possible without Handmade Hero and
+// https://yakvi.github.io/handmade-hero-notes/html/day7.html
+
+// Special thanks to this absolute chad for Xlib help:
+// https://handmade.network/forums/articles/t/2834-tutorial_a_tour_through_xlib_and_related_technologies
+
+// Glx loading resources:
+// https://registry.khronos.org/OpenGL/extensions/ARB/GLX_ARB_create_context.txt
+// https://github.com/gamedevtech/X11OpenGLWindow
+
+// Gamepad input resources used:
+// https://docs.kernel.org/input/input.html
+// https://github.com/torvalds/linux/blob/master/include/uapi/linux/input-event-codes.h
+// https://github.com/MysteriousJ/Joystick-Input-Examples/blob/main/src/evdev.cpp
+// https://handmade.network/forums/t/3673-modern_way_to_read_gamepad_input_with_c_on_linux
+
+// PNG loading:
+// https://www.youtube.com/watch?v=lkEWbIUEuN0&list=PLEMXAbCVnmY5y4dSkKf297tJqwMxJOk7e
+
+/* TODO Known bugs: 
+- Using wireless bluetooth controllers.
+*/
+
+#define internal static
+#define global static
+#define persist static
+
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
+#define MAX(a, b) (((a) > (b)) ? (a) : (b))
+
+#define LINUX_CLOCK CLOCK_MONOTONIC
+
+#define M_PI 3.14159265358979323846
+#define FPS 30
+
 // NOTE(Cel): CRT for now... :)
 #include <asm-generic/errno-base.h>
 #include <bits/time.h>
@@ -23,49 +76,7 @@
 #include <X11/Xatom.h>
 #include <GL/glx.h>
 
-// TODO(Cel): I'm not gonna pretend like I know what im doing with audio.
-// i'll throw in the towel here, but i'll be back >:) (prob when I have multithreading).
-
-// None of this would be possible without Handmade Hero and
-// https://yakvi.github.io/handmade-hero-notes/html/day7.html
-
-// Special thanks to this absolute chad for Xlib help:
-// https://handmade.network/forums/articles/t/2834-tutorial_a_tour_through_xlib_and_related_technologies
-
-// Glx loading resources:
-// https://registry.khronos.org/OpenGL/extensions/ARB/GLX_ARB_create_context.txt
-// https://github.com/gamedevtech/X11OpenGLWindow
-
-// Gamepad input resources used:
-// https://docs.kernel.org/input/input.html
-// https://github.com/torvalds/linux/blob/master/include/uapi/linux/input-event-codes.h
-// https://github.com/MysteriousJ/Joystick-Input-Examples/blob/main/src/evdev.cpp
-// https://handmade.network/forums/t/3673-modern_way_to_read_gamepad_input_with_c_on_linux
-
-// Audio (ALSA) resources used:
-// https://www.alsa-project.org/alsa-doc/alsa-lib/_2test_2pcm_8c-example.html
-// https://alexvia.com/post/003_alsa_playback/
-// https://www.alsa-project.org/alsa-doc/alsa-lib/pcm.html
-// https://github.com/AlexViaColl/alsa-playback/blob/main/main.c
-
-// PNG loading:
-// https://www.youtube.com/watch?v=lkEWbIUEuN0&list=PLEMXAbCVnmY5y4dSkKf297tJqwMxJOk7e
-
-/* TODO Known bugs: 
-- Using wireless bluetooth controllers.
-*/
-
-#define internal static
-#define global static
-#define persist static
-
-#define MIN(a, b) (((a) < (b)) ? (a) : (b))
-#define MAX(a, b) (((a) > (b)) ? (a) : (b))
-
-#define LINUX_CLOCK CLOCK_MONOTONIC
-
-#define M_PI 3.14159265358979323846
-#define FPS 30
+#include "tusker.c"
 
 typedef int8_t s8;
 typedef uint8_t u8;
@@ -478,16 +489,7 @@ int main(int argc, char** argv)
 
         glClear(GL_COLOR_BUFFER_BIT);
         
-        glBegin(GL_TRIANGLES);
-        
-        glColor3f(  1.f,  0.0f,  0.0f);
-        glVertex3f(-0.5f, -0.5f,  0.0f);
-        glColor3f(  0.0f,  1.f,  0.0f);
-        glVertex3f( 0.5f, -0.5f,  0.0f);
-        glColor3f(  0.0f,  0.0f,  1.f);
-        glVertex3f( 0.0f,  0.5f,  0.0f);
-        
-        glEnd();
+        GameUpdateAndRender();
         
         glXSwapBuffers(displayInfo.xDisplay, displayInfo.xWindow);
 
@@ -497,7 +499,7 @@ int main(int argc, char** argv)
         f32 msPerFrame = ((f32)(1000.f * counterElapsed) / (f32)performaceFrequency);
         f32 framesPerSecond = (f32)performaceFrequency / (f32)counterElapsed;
 
-        fprintf(stderr, "ms/frame: %.02fms | f/s: %.02f\n", msPerFrame, framesPerSecond);
+        // fprintf(stderr, "ms/frame: %.02fms | f/s: %.02f\n", msPerFrame, framesPerSecond);
 
         lastCounter = currentCounter;
     }
