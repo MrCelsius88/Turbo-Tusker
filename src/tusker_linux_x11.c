@@ -43,6 +43,10 @@
 #define global static
 #define persist static
 
+#define LINUX_GAMEPAD_MAX_BUTTONS 10
+#define LINUX_GAMEPAD_MAX_AXES 10
+#define LINUX_MAX_GAMEPADS 4
+
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
 
@@ -51,33 +55,7 @@
 #define M_PI 3.14159265358979323846
 #define FPS 30
 
-// NOTE(Cel): CRT for now... :)
-#include <asm-generic/errno-base.h>
-#include <bits/time.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-// NOTE(Cel): But maybe hold on to these...
 #include <stdint.h>
-#include <stdbool.h>
-
-#include <math.h> // Im so lazy lmao
-
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <sys/mman.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <linux/input.h>
-#include <time.h>
-
-#include <X11/Xlib.h>
-#include <X11/Xutil.h>
-#include <X11/Xatom.h>
-#include <GL/glx.h>
-
-#include "tusker.c"
-
 typedef int8_t s8;
 typedef uint8_t u8;
 typedef int16_t s16;
@@ -89,14 +67,38 @@ typedef uint64_t u64;
 typedef float f32;
 typedef double f64;
 
-typedef struct
-{
-    Window xWindow;
-    Display* xDisplay;
-    XVisualInfo* xVisualInfo;
-    int xScreen;
-    int xRootWindow;
-} LinuxDisplayInfo;
+// NOTE(Cel): All this stuff is not linux-specific,
+// so our game code can know about it.
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdbool.h>
+
+#include <math.h> // Im so lazy lmao
+
+// TODO(Cel): We will abstract renderer later
+// and our game code should not know if
+// OpenGL exists or not. So move this when
+// that happens.
+#include <GL/glx.h>
+
+#include "tusker.c"
+
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
+#include <sys/ioctl.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <linux/joystick.h>
+#include <linux/input.h>
+#include <time.h>
+
+#include <X11/Xlib.h>
+#include <X11/Xutil.h>
+#include <X11/Xatom.h>
+
+#include "tusker_linux_x11.h"
 
 global bool g_gameRunning = true;
 
@@ -214,6 +216,85 @@ LinuxDisplayInit(LinuxDisplayInfo* displayInfo, bool createVisualInfo)
         }
     }
     return 0;
+}
+
+internal void
+LinuxOpenGamepads(LinuxGamepad* gamepads, int numGamepads)
+{
+    char event[32];
+    int gamepadIndex = 0;
+    for (int eventIndex = 0; eventIndex < 32; ++eventIndex)
+    {
+        sprintf(event, "/dev/input/event%d", eventIndex);
+        int file = open(event, O_RDWR | O_NONBLOCK);
+        if (file != -1)
+        {
+            LinuxGamepad gamepad = {0};
+            gamepad.connected = true;
+            gamepad.file = file;
+            // NOTE(Cel): Get controller name
+            ioctl(file, EVIOCGNAME(sizeof(gamepad.name)), gamepad.name);
+
+            // NOTE(Cel): Setup controller axis
+            for (int i = 0; i < LINUX_GAMEPAD_MAX_AXES; ++i)
+            {
+                struct input_absinfo axisInfo;
+                if (ioctl(file, EVIOCGABS(i), &axisInfo) != -1)
+                {
+                    gamepad.axes[i].min = axisInfo.minimum;
+                    gamepad.axes[i].max = axisInfo.maximum;
+                }
+            }
+
+            gamepads[gamepadIndex] = gamepad;
+            if (gamepadIndex < numGamepads) gamepadIndex++;
+        }
+    }
+}
+
+internal void
+LinuxGetGamepadInput(LinuxGamepad* gamepad)
+{
+    struct input_event event;
+    while (read(gamepad->file, &event, sizeof(event)) > 0)
+    {
+        if (event.type == EV_KEY && event.code >= BTN_SOUTH && event.code <= BTN_WEST)
+        {
+            gamepad->buttons[event.code-0x130] = event.value;
+        }
+        if (event.type == EV_ABS && event.code < ABS_TOOL_WIDTH)
+        {
+            LinuxGamepadAxis* axis = &gamepad->axes[event.code];
+            f32 axisNormalized = (event.value - axis->min) / (f32)(axis->max - axis->min) * 2 - 1;
+            axis->value = axisNormalized;
+        }
+    }
+}
+
+internal void
+LinuxCloseGamepad(LinuxGamepad* gamepad)
+{
+    if (gamepad->connected)
+    {
+        close(gamepad->file);
+        gamepad->connected = false;
+    }
+}
+
+internal void
+linuxCloseGamepads(LinuxGamepad* gamepads, int numGamepads)
+{
+    for (int i = 0; i < numGamepads; ++i)
+    {
+        LinuxCloseGamepad(&gamepads[i]);
+    }
+}
+
+internal void
+LinuxProcessGamepadDigitalButton()
+{
+
+
 }
 
 internal int
@@ -440,48 +521,31 @@ int main(int argc, char** argv)
         return 1;
     }
     Atom wmDelete = LinuxGetCloseMessage(&displayInfo);
-    
-    int gamepad = open("/dev/input/by-id/usb-Microsoft_Controller_30394E4F30343234353133303133-event-joystick", O_RDONLY | O_NONBLOCK);
-    f32 gamepadStickLeftX = 0;
-    f32 gamepadStickLeftY = 0;
-    bool gamepadButtonA = 0;
-    bool gamepadButtonB = 0;
 
     u64 performaceFrequency = LinuxGetPerformaceFrequency();
     u64 lastCounter = LinuxGetPerformaceCounter();
+
+    LinuxGamepad gamepads[LINUX_MAX_GAMEPADS] = {0};
+    LinuxOpenGamepads(gamepads, LINUX_MAX_GAMEPADS);
+
     while (g_gameRunning)
     {
+        GameInput input = {0};
         LinuxDoEvents(&displayInfo, wmDelete);
         
-        struct input_event events[2]; // TODO(Cel): Change this to something smaller like 1, 2, or 4 at max.
-        int bufferRead = read(gamepad, events, sizeof(events));
-        // NOTE(Cel): Besides an error, -1 can also mean that there are no input events in the buffer.
-        if (bufferRead != -1) 
+        for (int i = 0; i < LINUX_MAX_GAMEPADS; ++i)
         {
-            int eventCount = bufferRead / sizeof(struct input_event);
-            for (int eventIndex = 0; eventIndex < eventCount; ++eventIndex)
+            if (gamepads[i].connected)
             {
-                struct input_event* event = &events[eventIndex];
-                switch (event->type)
-                {
-                    case EV_ABS: // Joystick movement
-                    {
-                        switch (event->code)
-                        {
-                            case ABS_X: { gamepadStickLeftX = event->value; } break;
-                            case ABS_Y: { gamepadStickLeftY = event->value; } break;
-                        }
-                    } break;
-                    
-                    case EV_KEY:
-                    {
-                        switch (event->code)
-                        {
-                            case BTN_A: { gamepadButtonA = event->value; } break;
-                            case BTN_B: { gamepadButtonB = event->value; } break;
-                        }
-                    } break;
-                }
+                LinuxGetGamepadInput(&gamepads[i]);
+                fprintf(stderr, "%s: | ", gamepads[0].name);
+                //fprintf(stderr, "X1 Axis: %f", gamepads[0].axes[0].value);
+                //fprintf(stderr, "Y1 Axis: %f", gamepads[0].axes[1].value);
+                fprintf(stderr, "A Button: %d | ", gamepads[0].buttons[0]);
+                fprintf(stderr, "B Button: %d | ", gamepads[0].buttons[1]);
+                fprintf(stderr, "X Button: %d | ", gamepads[0].buttons[3]); //NOTE(Cel:) What even is a 'c' button anyway?
+                fprintf(stderr, "Y Button: %d | ", gamepads[0].buttons[4]);
+                fprintf(stderr, "\n");
             }
         }
 
@@ -489,7 +553,7 @@ int main(int argc, char** argv)
 
         glClear(GL_COLOR_BUFFER_BIT);
         
-        GameUpdateAndRender();
+        GameUpdateAndRender(&input);
         
         glXSwapBuffers(displayInfo.xDisplay, displayInfo.xWindow);
 
