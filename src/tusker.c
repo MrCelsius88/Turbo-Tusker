@@ -1,34 +1,47 @@
 #include "tusker.h"
 
 extern void
-GameUpdateAndRender(GameInput* gameInput)
+GameUpdateAndRender(GameMemory* gameMemory, GameInput* gameInput)
 {
-    persist f32 trianglePosX;
-    persist f32 trianglePosY;
+    GameState* gameState = (GameState*)gameMemory->permanentMemory;
 
-    if (gameInput->controllers[0].south.endedDown)
+    if (!gameMemory->initialized)
     {
-        trianglePosY -= 0.01f;
+        gameState->trianglePosX = 0.f;
+        gameState->trianglePosY = 0.f;
+        gameState->triangleColor = 0.f;
+        gameMemory->initialized = true;
     }
-    if (gameInput->controllers[0].east.endedDown)
+
+    GameControllerInput* input0 = &gameInput->controllers[0];
+    if (input0->south.endedDown)
     {
-        trianglePosX += 0.01f;
+        gameState->trianglePosY -= 0.01f;
     }
-    if (gameInput->controllers[0].north.endedDown)
+    if (input0->east.endedDown)
     {
-        trianglePosY += 0.01f;
+        gameState->trianglePosX += 0.01f;
     }
-    if (gameInput->controllers[0].west.endedDown)
+    if (input0->north.endedDown)
     {
-        trianglePosX -= 0.01f;
+        gameState->trianglePosY += 0.01f;
+    }
+    if (input0->west.endedDown)
+    {
+        gameState->trianglePosX -= 0.01f;
+    }
+
+    if (input0->isAnalog)
+    {
+        gameState->triangleColor = input0->endX;
     }
 
     glBegin(GL_TRIANGLES);
-    glColor3f(   1.f,  0.0f,  0.0f  );
-    glVertex3f( -0.5f + trianglePosX, -0.5f + trianglePosY,  0.0f );
-    glColor3f(   0.0f, 1.f,  0.0f  );
-    glVertex3f(  0.5f + trianglePosX, -0.5f + trianglePosY,  0.0f );
-    glColor3f(   0.0f,  0.0f,  1.f  );
-    glVertex3f(  0.0f + trianglePosX,  0.5f + trianglePosY,  0.0f );
+    glColor3f(   gameState->triangleColor,  0.0f,  0.0f  );
+    glVertex3f( -0.5f + gameState->trianglePosX, -0.5f + gameState->trianglePosY,  0.0f );
+    glColor3f(   0.0f, gameState->triangleColor,  0.0f  );
+    glVertex3f(  0.5f + gameState->trianglePosX, -0.5f + gameState->trianglePosY,  0.0f );
+    glColor3f(   0.0f,  0.0f,  gameState->triangleColor  );
+    glVertex3f(  0.0f + gameState->trianglePosX,  0.5f + gameState->trianglePosY,  0.0f );
     glEnd();
 }

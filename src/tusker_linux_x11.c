@@ -45,19 +45,11 @@
 #define persist static
 
 #define LINUX_GAMEPAD_BUTTON_INDEX_OFFSET 0x130
-
 #define LINUX_GAMEPAD_MAX_BUTTONS 5
 #define LINUX_GAMEPAD_MAX_AXES 4
 #define LINUX_MAX_GAMEPADS 4
 
-#define ArrayCount(array) (sizeof(array) / sizeof((array)[0]))
-#define MIN(a, b) (((a) < (b)) ? (a) : (b))
-#define MAX(a, b) (((a) > (b)) ? (a) : (b))
-
 #define LINUX_CLOCK CLOCK_MONOTONIC
-
-#define M_PI 3.14159265358979323846
-#define FPS 30
 
 #include <stdint.h>
 typedef int8_t s8;
@@ -569,13 +561,23 @@ int main(int argc, char** argv)
     }
     Atom wmDelete = LinuxGetCloseMessage(&displayInfo);
 
+    GameMemory gameMemory = {0};
+    gameMemory.permanentMemorySize = MEGABYTES(64);
+    gameMemory.transientMemorySize = GIGABYTES(2);
+    gameMemory.permanentMemory = mmap(0, gameMemory.permanentMemorySize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    gameMemory.transientMemory = mmap(0, gameMemory.transientMemorySize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    if (!gameMemory.permanentMemory || !gameMemory.transientMemory)
+    {
+        fprintf(stderr, "Unable to allocate game memory!\n");
+        return 1;
+    }
+
     LinuxGamepad gamepads[LINUX_MAX_GAMEPADS] = {0};
     LinuxOpenGamepads(gamepads, LINUX_MAX_GAMEPADS);
-
     GameInput input[2] = {0};
     GameInput* oldInput = &input[0];
     GameInput* newInput = &input[1];
-     int numControllers = LINUX_MAX_GAMEPADS;
+    int numControllers = LINUX_MAX_GAMEPADS;
     if (numControllers > ArrayCount(newInput->controllers)) numControllers = ArrayCount(newInput->controllers);
 
     u64 performaceFrequency = LinuxGetPerformaceFrequency();
@@ -619,7 +621,7 @@ int main(int argc, char** argv)
 
         glClearColor(0.2f, 0.3f, 0.3f, 1.f);
         glClear(GL_COLOR_BUFFER_BIT);
-        GameUpdateAndRender(newInput);
+        GameUpdateAndRender(&gameMemory, newInput);
         glXSwapBuffers(displayInfo.xDisplay, displayInfo.xWindow);
 
         LinuxSwapGameInput(&oldInput, &newInput);
