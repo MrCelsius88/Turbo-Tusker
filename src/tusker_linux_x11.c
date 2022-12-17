@@ -75,7 +75,7 @@ typedef double f64;
 // so our game code can know about it.
 #include <stdlib.h>
 #include <stdio.h>
-#include <string.h>
+#include <string.h> // TODO(Cel): Make my own c-string functions
 #include <stdbool.h>
 
 #include <math.h> // Im so lazy lmao
@@ -94,9 +94,10 @@ typedef double f64;
 #include <sys/ioctl.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <time.h>
+#include <dirent.h>
 #include <linux/joystick.h>
 #include <linux/input.h>
-#include <time.h>
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -247,35 +248,44 @@ LinuxDisplayInit(LinuxDisplayInfo* displayInfo, bool createVisualInfo)
 internal void
 LinuxOpenGamepads(LinuxGamepad* gamepads, int numGamepads)
 {
-    char event[32];
+    DIR* eventDirectory;
+    struct dirent* event;
+    char eventFilePath[128];
     int gamepadIndex = 0;
-    for (int eventIndex = 0; eventIndex <= 256; ++eventIndex)
+
+    eventDirectory = opendir("/dev/input");
+    if (eventDirectory)
     {
-        sprintf(event, "/dev/input/event%d", eventIndex);
-        int file = open(event, O_RDWR | O_NONBLOCK);
-        if (file != -1)
+        while (event = readdir(eventDirectory))
         {
-            if (gamepads[gamepadIndex].file == file) continue;
+            if (!strstr(event->d_name, "event")) { continue; }
 
-            LinuxGamepad gamepad = {0};
-            gamepad.connected = true;
-            gamepad.file = file;
-            // NOTE(Cel): Get controller name
-            ioctl(file, EVIOCGNAME(sizeof(gamepad.name)), gamepad.name);
-
-            // NOTE(Cel): Setup controller axis
-            for (int i = 0; i < LINUX_GAMEPAD_MAX_AXES; ++i)
+            sprintf(eventFilePath, "/dev/input/%s", event->d_name);
+            int file = open(eventFilePath, O_RDWR | O_NONBLOCK);
+            if (file != -1)
             {
-                struct input_absinfo axisInfo;
-                if (ioctl(file, EVIOCGABS(i), &axisInfo) != -1)
-                {
-                    gamepad.axes[i].min = axisInfo.minimum;
-                    gamepad.axes[i].max = axisInfo.maximum;
-                }
-            }
+                if (gamepads[gamepadIndex].file == file) continue;
 
-            gamepads[gamepadIndex] = gamepad;
-            if (gamepadIndex < numGamepads) gamepadIndex++;
+                LinuxGamepad gamepad = {0};
+                gamepad.connected = true;
+                gamepad.file = file;
+                // NOTE(Cel): Get controller name
+                ioctl(file, EVIOCGNAME(sizeof(gamepad.name)), gamepad.name);
+
+                // NOTE(Cel): Setup controller axis
+                for (int i = 0; i < LINUX_GAMEPAD_MAX_AXES; ++i)
+                {
+                    struct input_absinfo axisInfo;
+                    if (ioctl(file, EVIOCGABS(i), &axisInfo) != -1)
+                    {
+                        gamepad.axes[i].min = axisInfo.minimum;
+                        gamepad.axes[i].max = axisInfo.maximum;
+                    }
+                }
+
+                gamepads[gamepadIndex] = gamepad;
+                if (gamepadIndex < numGamepads) gamepadIndex++;
+            }
         }
     }
 }

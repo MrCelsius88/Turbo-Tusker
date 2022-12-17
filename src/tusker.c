@@ -10,15 +10,15 @@ GameUpdateAndRender(GameInput* gameInput)
     {
         trianglePosY -= 0.01f;
     }
-    else if (gameInput->controllers[0].east.endedDown)
+    if (gameInput->controllers[0].east.endedDown)
     {
         trianglePosX += 0.01f;
     }
-    else if (gameInput->controllers[0].north.endedDown)
+    if (gameInput->controllers[0].north.endedDown)
     {
         trianglePosY += 0.01f;
     }
-    else if (gameInput->controllers[0].west.endedDown)
+    if (gameInput->controllers[0].west.endedDown)
     {
         trianglePosX -= 0.01f;
     }
