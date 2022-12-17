@@ -17,7 +17,7 @@
 // i'll throw in the towel here, but i'll be back >:) (prob when I have multithreading).
 
 // None of this would be possible without Handmade Hero and
-// https://yakvi.github.io/handmade-hero-notes/html/day7.html
+// https://yakvi.github.io/handmade-hero-notes/
 
 // Special thanks to this absolute chad for Xlib help:
 // https://handmade.network/forums/articles/t/2834-tutorial_a_tour_through_xlib_and_related_technologies
