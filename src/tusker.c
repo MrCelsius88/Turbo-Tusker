@@ -5,14 +5,22 @@ GameUpdateAndRender(GameInput* gameInput)
 {
     persist f32 trianglePosX;
     persist f32 trianglePosY;
-    if (gameInput->controllers[0].right.endedDown)
+
+    if (gameInput->controllers[0].south.endedDown)
+    {
+        trianglePosY -= 0.01f;
+    }
+    else if (gameInput->controllers[0].east.endedDown)
     {
         trianglePosX += 0.01f;
     }
-
-    if (gameInput->controllers[0].up.endedDown)
+    else if (gameInput->controllers[0].north.endedDown)
     {
         trianglePosY += 0.01f;
+    }
+    else if (gameInput->controllers[0].west.endedDown)
+    {
+        trianglePosX -= 0.01f;
     }
 
     glBegin(GL_TRIANGLES);

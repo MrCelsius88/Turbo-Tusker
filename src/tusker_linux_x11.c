@@ -31,6 +31,7 @@
 // https://github.com/torvalds/linux/blob/master/include/uapi/linux/input-event-codes.h
 // https://github.com/MysteriousJ/Joystick-Input-Examples/blob/main/src/evdev.cpp
 // https://handmade.network/forums/t/3673-modern_way_to_read_gamepad_input_with_c_on_linux
+// https://docs.kernel.org/input/gamepad.html
 
 // PNG loading:
 // https://www.youtube.com/watch?v=lkEWbIUEuN0&list=PLEMXAbCVnmY5y4dSkKf297tJqwMxJOk7e
@@ -43,10 +44,13 @@
 #define global static
 #define persist static
 
-#define LINUX_GAMEPAD_MAX_BUTTONS 10
-#define LINUX_GAMEPAD_MAX_AXES 10
+#define LINUX_GAMEPAD_BUTTON_INDEX_OFFSET 0x130
+
+#define LINUX_GAMEPAD_MAX_BUTTONS 5
+#define LINUX_GAMEPAD_MAX_AXES 4
 #define LINUX_MAX_GAMEPADS 4
 
+#define ArrayCount(array) (sizeof(array) / sizeof((array)[0]))
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
 
@@ -98,7 +102,29 @@ typedef double f64;
 #include <X11/Xutil.h>
 #include <X11/Xatom.h>
 
-#include "tusker_linux_x11.h"
+typedef struct
+{
+    Window xWindow;
+    Display* xDisplay;
+    XVisualInfo* xVisualInfo;
+    int xScreen;
+    int xRootWindow;
+} LinuxDisplayInfo;
+
+typedef struct
+{
+    s32 min, max;
+    f32 value;
+} LinuxGamepadAxis;
+
+typedef struct
+{
+    bool connected;
+    bool buttons[LINUX_GAMEPAD_MAX_BUTTONS];
+    LinuxGamepadAxis axes[LINUX_GAMEPAD_MAX_AXES];
+    char name[128];
+    int file;
+} LinuxGamepad;
 
 global bool g_gameRunning = true;
 
@@ -223,12 +249,14 @@ LinuxOpenGamepads(LinuxGamepad* gamepads, int numGamepads)
 {
     char event[32];
     int gamepadIndex = 0;
-    for (int eventIndex = 0; eventIndex < 32; ++eventIndex)
+    for (int eventIndex = 0; eventIndex <= 256; ++eventIndex)
     {
         sprintf(event, "/dev/input/event%d", eventIndex);
         int file = open(event, O_RDWR | O_NONBLOCK);
         if (file != -1)
         {
+            if (gamepads[gamepadIndex].file == file) continue;
+
             LinuxGamepad gamepad = {0};
             gamepad.connected = true;
             gamepad.file = file;
@@ -260,11 +288,12 @@ LinuxGetGamepadInput(LinuxGamepad* gamepad)
     {
         if (event.type == EV_KEY && event.code >= BTN_SOUTH && event.code <= BTN_WEST)
         {
-            gamepad->buttons[event.code-0x130] = event.value;
+            gamepad->buttons[event.code-LINUX_GAMEPAD_BUTTON_INDEX_OFFSET] = event.value;
         }
         if (event.type == EV_ABS && event.code < ABS_TOOL_WIDTH)
         {
             LinuxGamepadAxis* axis = &gamepad->axes[event.code];
+            // TODO(Cel): Tweak this:
             f32 axisNormalized = (event.value - axis->min) / (f32)(axis->max - axis->min) * 2 - 1;
             axis->value = axisNormalized;
         }
@@ -291,10 +320,18 @@ linuxCloseGamepads(LinuxGamepad* gamepads, int numGamepads)
 }
 
 internal void
-LinuxProcessGamepadDigitalButton()
+LinuxProcessGamepadDigitalButton(LinuxGamepad* gamepad, GameButtonState* oldState, u16 buttonCode, GameButtonState* newState)
 {
+    newState->endedDown = gamepad->buttons[buttonCode-LINUX_GAMEPAD_BUTTON_INDEX_OFFSET];
+    newState->halfTransitionCount = (oldState->endedDown != newState->endedDown) ? 1 : 0;
+}
 
-
+internal void
+LinuxSwapGameInput(GameInput** oldInput, GameInput** newInput)
+{
+    GameInput* temp = *newInput;
+    *newInput = *oldInput;
+    *oldInput = temp;
 }
 
 internal int
@@ -522,40 +559,60 @@ int main(int argc, char** argv)
     }
     Atom wmDelete = LinuxGetCloseMessage(&displayInfo);
 
-    u64 performaceFrequency = LinuxGetPerformaceFrequency();
-    u64 lastCounter = LinuxGetPerformaceCounter();
-
     LinuxGamepad gamepads[LINUX_MAX_GAMEPADS] = {0};
     LinuxOpenGamepads(gamepads, LINUX_MAX_GAMEPADS);
 
+    GameInput input[2] = {0};
+    GameInput* oldInput = &input[0];
+    GameInput* newInput = &input[1];
+     int numControllers = LINUX_MAX_GAMEPADS;
+    if (numControllers > ArrayCount(newInput->controllers)) numControllers = ArrayCount(newInput->controllers);
+
+    u64 performaceFrequency = LinuxGetPerformaceFrequency();
+    u64 lastCounter = LinuxGetPerformaceCounter();
     while (g_gameRunning)
     {
-        GameInput input = {0};
         LinuxDoEvents(&displayInfo, wmDelete);
         
-        for (int i = 0; i < LINUX_MAX_GAMEPADS; ++i)
+        for (int i = 0; i < numControllers; ++i)
         {
             if (gamepads[i].connected)
             {
                 LinuxGetGamepadInput(&gamepads[i]);
+
+                GameControllerInput* oldController = &oldInput->controllers[i];
+                GameControllerInput* newController = &newInput->controllers[i];
+
+                // NOTE(Cel):
+                LinuxProcessGamepadDigitalButton(&gamepads[i], &oldController->south, BTN_A, &newController->south);
+                LinuxProcessGamepadDigitalButton(&gamepads[i], &oldController->east, BTN_B, &newController->east);
+                LinuxProcessGamepadDigitalButton(&gamepads[i], &oldController->north, BTN_Y, &newController->north);
+                LinuxProcessGamepadDigitalButton(&gamepads[i], &oldController->west, BTN_X, &newController->west);
+                newController->startX = oldController->endX;
+                newController->startX = oldController->endY;
+                newController->minX = newController->maxX = newController->endX = gamepads[i].axes[0].value;
+                newController->minY = newController->maxY = newController->endY = gamepads[i].axes[1].value;
+                newController->isAnalog = true;
+
+                #if 0
                 fprintf(stderr, "%s: | ", gamepads[0].name);
-                //fprintf(stderr, "X1 Axis: %f", gamepads[0].axes[0].value);
-                //fprintf(stderr, "Y1 Axis: %f", gamepads[0].axes[1].value);
+                fprintf(stderr, "X1 Axis: %f", gamepads[0].axes[0].value);
+                fprintf(stderr, "Y1 Axis: %f", gamepads[0].axes[1].value);
                 fprintf(stderr, "A Button: %d | ", gamepads[0].buttons[0]);
                 fprintf(stderr, "B Button: %d | ", gamepads[0].buttons[1]);
                 fprintf(stderr, "X Button: %d | ", gamepads[0].buttons[3]); //NOTE(Cel:) What even is a 'c' button anyway?
                 fprintf(stderr, "Y Button: %d | ", gamepads[0].buttons[4]);
                 fprintf(stderr, "\n");
+                #endif
             }
         }
 
         glClearColor(0.2f, 0.3f, 0.3f, 1.f);
-
         glClear(GL_COLOR_BUFFER_BIT);
-        
-        GameUpdateAndRender(&input);
-        
+        GameUpdateAndRender(newInput);
         glXSwapBuffers(displayInfo.xDisplay, displayInfo.xWindow);
+
+        LinuxSwapGameInput(&oldInput, &newInput);
 
         u64 currentCounter = LinuxGetPerformaceCounter();
 

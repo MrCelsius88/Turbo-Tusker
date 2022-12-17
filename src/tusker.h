@@ -17,19 +17,15 @@ typedef struct
     f32 maxX, maxY;
     f32 endX, endY;
 
-    // NOTE(Cel): These do not represent
-    // the D PAD!!! Instead they are mapped to the
-    // A B X Y buttons. So on an XBox controller UP
-    // would be Y. And on a keyboard, UP is W.
     union
     {
         GameButtonState buttons[4];
         struct
         {
-            GameButtonState up;
-            GameButtonState down;
-            GameButtonState left;
-            GameButtonState right;
+            GameButtonState south;
+            GameButtonState east;
+            GameButtonState north;
+            GameButtonState west;
         };
     };
 
