@@ -88,10 +88,10 @@ typedef struct
 
 typedef struct
 {
-    u64 permanentMemorySize;
+    ssize_t permanentMemorySize;
     void* permanentMemory; // NOTE(Cel): Always clear to zero on startup
 
-    u64 transientMemorySize;
+    ssize_t transientMemorySize;
     void* transientMemory;
 
     bool initialized;

@@ -151,7 +151,7 @@ DebugPlatformFileRead(const char* filename)
                 else
                 {
                     // Unable to read file!
-                    DebugPlatformFileFreeMemory(result);
+                    DebugPlatformFileFreeMemory(&result);
                     result.content = 0;
                 }
             }
@@ -187,7 +187,7 @@ DebugPlatformFileFreeMemory(DebugFileData* fileData)
 {
     if (fileData->content && fileData->fileSize > 0)
     {
-        munmap(fileData.content, fileData.fileSize);
+        munmap(fileData->content, fileData->fileSize);
         fileData->content = 0;
         fileData->fileSize = 0;
     }
@@ -196,7 +196,7 @@ DebugPlatformFileFreeMemory(DebugFileData* fileData)
 internal void
 LinuxLoadGlxFuncs(void)
 {
-    glXCreateContextAttribsARB = (glx_create_context_attribs_arb*)glXGetProcAddressARB("glXCreateContextAttribsARB");
+    glXCreateContextAttribsARB = (glx_create_context_attribs_arb*)glXGetProcAddressARB((const GLubyte*)"glXCreateContextAttribsARB");
     if (!glXCreateContextAttribsARB) { glXCreateContextAttribsARB = glXCreateContextAttribsARBStub; }
 }
 
@@ -376,7 +376,7 @@ LinuxCloseGamepad(LinuxGamepad* gamepad)
 }
 
 internal void
-linuxCloseGamepads(LinuxGamepad* gamepads, int numGamepads)
+LinuxCloseGamepads(LinuxGamepad* gamepads, int numGamepads)
 {
     for (int i = 0; i < numGamepads; ++i)
     {
@@ -631,9 +631,9 @@ int main(int argc, char** argv)
     #endif
     GameMemory gameMemory = {0};
     gameMemory.permanentMemorySize = MEGABYTES(64);
-    gameMemory.transientMemorySize = GIGABYTES(2);
-    u64 memorySize = gameMemory.permanentMemorySize + gameMemory.transientMemorySize;
-    gameMemory.permanentMemory = mmap(baseAddress, memorySize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    gameMemory.transientMemorySize = GIGABYTES(1);
+    ssize_t memorySize = gameMemory.permanentMemorySize + gameMemory.transientMemorySize;
+    gameMemory.permanentMemory = mmap(baseAddress, (ssize_t)memorySize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
     gameMemory.transientMemory = ((u8*)gameMemory.permanentMemory + gameMemory.permanentMemorySize);
     if (!gameMemory.permanentMemory || !gameMemory.transientMemory)
     {
@@ -654,7 +654,9 @@ int main(int argc, char** argv)
     while (g_gameRunning)
     {
         LinuxDoEvents(&displayInfo, wmDelete);
-        
+
+        // TODO(Cel): Move controller code to "LinuxDoEvents" and also check for controller connect and disconnect
+        // during game loop.
         for (int i = 0; i < numControllers; ++i)
         {
             if (gamepads[i].connected)
@@ -706,6 +708,7 @@ int main(int argc, char** argv)
         lastCounter = currentCounter;
     }
 
+    LinuxCloseGamepads(gamepads, numControllers);
 
     return 0;
 }
