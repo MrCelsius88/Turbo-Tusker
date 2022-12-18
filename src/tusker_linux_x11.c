@@ -130,6 +130,69 @@ GLX_CREATE_CONTEXT_ATTRIBS_ARB(glXCreateContextAttribsARBStub)
 global glx_create_context_attribs_arb* glXCreateContextAttribsARB_ = glXCreateContextAttribsARBStub;
 #define glXCreateContextAttribsARB glXCreateContextAttribsARB_
 
+internal DebugFileData
+DebugPlatformFileRead(const char* filename)
+{
+    DebugFileData result = {0};
+
+    int file = open(filename, O_RDONLY);
+    if (file != -1)
+    {
+        struct stat fileInfo;
+        if (fstat(file, &fileInfo) != -1)
+        {
+            result.content = mmap(0, fileInfo.st_size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+            if (result.content)
+            {
+                if (fileInfo.st_size == read(file, result.content, fileInfo.st_size))
+                {
+                    result.fileSize = fileInfo.st_size;
+                }
+                else
+                {
+                    // Unable to read file!
+                    DebugPlatformFileFreeMemory(result);
+                    result.content = 0;
+                }
+            }
+        }
+        close(file);
+    }
+
+    return result;
+}
+
+internal bool
+DebugPlatformFileWrite(const char* filename, u32 dataSize, void* data)
+{
+    bool result = false;
+
+    int file = open(filename, O_WRONLY | O_CREAT, S_IRWXU);
+    if (file != -1)
+    {
+        ssize_t bytesWritten;
+        if (bytesWritten = write(file, data, dataSize))
+        {
+            // File write success!
+            result = (bytesWritten == dataSize);
+        }
+        close(file);
+    }
+
+    return result;
+}
+
+internal void
+DebugPlatformFileFreeMemory(DebugFileData* fileData)
+{
+    if (fileData->content && fileData->fileSize > 0)
+    {
+        munmap(fileData.content, fileData.fileSize);
+        fileData->content = 0;
+        fileData->fileSize = 0;
+    }
+}
+
 internal void
 LinuxLoadGlxFuncs(void)
 {
@@ -561,11 +624,17 @@ int main(int argc, char** argv)
     }
     Atom wmDelete = LinuxGetCloseMessage(&displayInfo);
 
+    #if TUSKER_INTERNAL
+    void* baseAddress = (void*)TERABYTES(2);
+    #else
+    void* baseAddress = 0;
+    #endif
     GameMemory gameMemory = {0};
     gameMemory.permanentMemorySize = MEGABYTES(64);
     gameMemory.transientMemorySize = GIGABYTES(2);
-    gameMemory.permanentMemory = mmap(0, gameMemory.permanentMemorySize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-    gameMemory.transientMemory = mmap(0, gameMemory.transientMemorySize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    u64 memorySize = gameMemory.permanentMemorySize + gameMemory.transientMemorySize;
+    gameMemory.permanentMemory = mmap(baseAddress, memorySize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    gameMemory.transientMemory = ((u8*)gameMemory.permanentMemory + gameMemory.permanentMemorySize);
     if (!gameMemory.permanentMemory || !gameMemory.transientMemory)
     {
         fprintf(stderr, "Unable to allocate game memory!\n");

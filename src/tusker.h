@@ -1,6 +1,23 @@
 #ifndef TUSKER_H_
 #define TUSKER_H_
 
+/*
+** NOTE(Cel):
+** TUSKER_INTERNAL:
+**  0 - Release build
+**  1 - Development build
+**
+** TUSKER_SLOW
+**  0 - Only fast code
+**  1 - Slow code included
+*/
+
+#if TUSKER_SLOW
+# define ASSERT(expression) if (!(expression)) { *(int*)0 = 0; }
+#else
+# define ASSERT(expression)
+#endif
+
 #define KILOBYTES(value) ((value) * 1024LL)
 #define MEGABYTES(value) (KILOBYTES(value) * 1024LL)
 #define GIGABYTES(value) (MEGABYTES(value) * 1024LL)
@@ -14,6 +31,23 @@
 #define FPS 30
 
 // NOTE(Cel): Platform layer -> Game services
+
+#if TUSKER_INTERNAL
+typedef struct
+{
+    u32 fileSize;
+    void* content;
+} DebugFileData;
+
+internal DebugFileData
+DebugPlatformFileRead(const char* filename);
+
+internal bool
+DebugPlatformFileWrite(const char* filename, u32 dataSize, void* data);
+
+internal void
+DebugPlatformFileFreeMemory(DebugFileData* fileData);
+#endif
 
 // NOTE(Cel): Game -> Platform layer services
 

@@ -3,7 +3,15 @@
 extern void
 GameUpdateAndRender(GameMemory* gameMemory, GameInput* gameInput)
 {
+    ASSERT(sizeof(GameState) <= gameMemory->permanentMemorySize);
     GameState* gameState = (GameState*)gameMemory->permanentMemory;
+
+    DebugFileData fileData = DebugPlatformFileRead("/home/giannib/dev/TurboTusker/src/"__FILE__);
+    if (fileData.content)
+    {
+        DebugPlatformFileWrite("/home/giannib/dev/TurboTusker/build/test.out", fileData.fileSize, fileData.content);
+        DebugPlatformFileFreeMemory(&fileData);
+    }
 
     if (!gameMemory->initialized)
     {
