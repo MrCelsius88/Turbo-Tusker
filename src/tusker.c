@@ -52,4 +52,5 @@ GameUpdateAndRender(GameMemory* gameMemory, GameInput* gameInput)
     glColor3f(   0.0f,  0.0f,  gameState->triangleColor  );
     glVertex3f(  0.0f + gameState->trianglePosX,  0.5f + gameState->trianglePosY,  0.0f );
     glEnd();
+
 }
