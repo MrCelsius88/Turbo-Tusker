@@ -73,13 +73,13 @@ typedef struct
     void* content;
 } DebugFileData;
 
-internal DebugFileData
+DebugFileData
 DebugPlatformFileRead(const char* filename);
 
-internal bool
+bool
 DebugPlatformFileWrite(const char* filename, u32 dataSize, void* data);
 
-internal void
+void
 DebugPlatformFileFreeMemory(DebugFileData* fileData);
 #endif
 
@@ -116,6 +116,7 @@ typedef struct
     };
 
 } GameControllerInput;
+global const GameControllerInput g_zeroController = {0};
 
 typedef struct
 {

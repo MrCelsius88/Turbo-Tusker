@@ -24,37 +24,28 @@ GameUpdateAndRender(GameMemory* gameMemory, GameInput* gameInput)
     for (int i = 0; i < ArrayCount(gameInput->controllers); ++i)
     {
         GameControllerInput* input = &gameInput->controllers[i];
-        if (input->buttonSouth.endedDown)
+        if (!input->isAnalog)
         {
-            gameState->trianglePosY -= 0.01f;
-        }
-        if (input->buttonEast.endedDown)
-        {
-            gameState->trianglePosX += 0.01f;
-        }
-        if (input->buttonNorth.endedDown)
-        {
-            gameState->trianglePosY += 0.01f;
-        }
-        if (input->buttonWest.endedDown)
-        {
-            gameState->trianglePosX -= 0.01f;
-        }
-
-        if (input->isAnalog)
-        {
-            gameState->triangleColor = input->stickAverageX;
-        }
-        else
-        {
+            if (input->stickSouth.endedDown)
+            {
+                gameState->trianglePosY -= 0.01f;
+            }
+            if (input->stickEast.endedDown)
+            {
+                gameState->trianglePosX += 0.01f;
+            }
+            if (input->stickNorth.endedDown)
+            {
+                gameState->trianglePosY += 0.01f;
+            }
             if (input->stickWest.endedDown)
             {
-                gameState->triangleColor = -1.f;
+                gameState->trianglePosX -= 0.01f;
             }
-            else if (input->stickEast.endedDown)
-            {
-                gameState->triangleColor = 1.f;
-            }
+        }
+        else if (input->isAnalog)
+        {
+            gameState->triangleColor = input->stickAverageX;
         }
     }
     glBegin(GL_TRIANGLES);
