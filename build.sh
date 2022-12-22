@@ -22,9 +22,6 @@ linker_opts="-static-libgcc" # Statically link to the CRT
 # LINUX PLATFORM LIBRARIES
 linux_libs="-lX11 -lGL -lm"
 
-# CROSS-PLATFORM DEFINES
-defines="-DTUSKER_SLOW=1 -DTUSKER_INTERNAL=1"
-
-gcc -O0 $compiler $ignored_warnings -DTUSKER_LINUX=1 $defines $debug $code/tusker_linux_x11.c $linker_opts $linux_libs -o TurboTusker
+gcc -O0 $compiler $ignored_warnings -DTUSKER_LINUX=1 $debug $code/tusker_linux_x11.c $linker_opts $linux_libs -o TurboTusker
 
 popd

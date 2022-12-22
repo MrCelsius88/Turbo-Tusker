@@ -12,6 +12,9 @@
 **  1 - Slow code included
 */
 
+#define TUSKER_INTERNAL 1 
+#define TUSKER_SLOW 1
+
 #if TUSKER_SLOW
 # define ASSERT(expression) if (!(expression)) { *(int*)0 = 0; }
 #else
@@ -27,8 +30,39 @@
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
 
+#define internal static
+#define global static
+#define persist static
+
 #define M_PI 3.14159265358979323846
 #define FPS 30
+
+#include <stdint.h>
+typedef int8_t s8;
+typedef uint8_t u8;
+typedef int16_t s16;
+typedef uint16_t u16;
+typedef int32_t s32;
+typedef uint32_t u32;
+typedef int64_t s64;
+typedef uint64_t u64;
+typedef float f32;
+typedef double f64;
+
+// NOTE(Cel): All this stuff is not linux-specific,
+// so our game code can know about it.
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h> // TODO(Cel): Make my own c-string functions
+#include <stdbool.h>
+
+#include <math.h> // Im so lazy lmao
+
+// TODO(Cel): We will abstract renderer later
+// and our game code should not know if
+// OpenGL exists or not. So move this when
+// that happens.
+#include <GL/glx.h>
 
 // NOTE(Cel): Platform layer -> Game services
 
@@ -62,20 +96,22 @@ typedef struct
 {
     bool isAnalog;
 
-    f32 startX, startY;
-    f32 minX, minY;
-    f32 maxX, maxY;
-    f32 endX, endY;
+    f32 stickAverageX, stickAverageY;
 
     union
     {
-        GameButtonState buttons[4];
+        GameButtonState buttons[8];
         struct
         {
-            GameButtonState south;
-            GameButtonState east;
-            GameButtonState north;
-            GameButtonState west;
+            GameButtonState stickSouth;
+            GameButtonState stickEast;
+            GameButtonState stickNorth;
+            GameButtonState stickWest;
+
+            GameButtonState buttonSouth;
+            GameButtonState buttonEast;
+            GameButtonState buttonNorth;
+            GameButtonState buttonWest;
         };
     };
 
@@ -83,7 +119,7 @@ typedef struct
 
 typedef struct
 {
-    GameControllerInput controllers[4];
+    GameControllerInput controllers[5];
 } GameInput;
 
 typedef struct

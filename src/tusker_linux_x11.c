@@ -40,10 +40,6 @@
 - Using wireless bluetooth controllers.
 */
 
-#define internal static
-#define global static
-#define persist static
-
 #define LINUX_MAX_GAMEPADS 4
 #define LINUX_GAMEPAD_MAX_BUTTONS 5
 #define LINUX_GAMEPAD_MAX_AXES 4
@@ -53,32 +49,7 @@
 
 #define LINUX_CLOCK CLOCK_MONOTONIC
 
-#include <stdint.h>
-typedef int8_t s8;
-typedef uint8_t u8;
-typedef int16_t s16;
-typedef uint16_t u16;
-typedef int32_t s32;
-typedef uint32_t u32;
-typedef int64_t s64;
-typedef uint64_t u64;
-typedef float f32;
-typedef double f64;
-
-// NOTE(Cel): All this stuff is not linux-specific,
-// so our game code can know about it.
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h> // TODO(Cel): Make my own c-string functions
-#include <stdbool.h>
-
-#include <math.h> // Im so lazy lmao
-
-// TODO(Cel): We will abstract renderer later
-// and our game code should not know if
-// OpenGL exists or not. So move this when
-// that happens.
-#include <GL/glx.h>
+#include "tusker.h"
 
 #include "tusker.c"
 
@@ -348,18 +319,14 @@ LinuxOpenGamepads(LinuxGamepad* gamepads, int numGamepads)
 }
 
 internal f32
-LinuxProcessJoystick(s32 value, s16 deadZoneThreshold)
+LinuxProcessJoystick(s32 value, s16 deadZoneThreshold, s32 axisMin, s32 axisMax)
 {
     f32 result = 0;
 
     if (value < -deadZoneThreshold)
-    {
-        result = (f32)((value + deadZoneThreshold) / (32768.f - deadZoneThreshold));
-    }
+        result = (f32)((value + deadZoneThreshold) / (f32)(32768.f - deadZoneThreshold));
     else if (value > deadZoneThreshold)
-    {
-        result = (f32)((value - deadZoneThreshold) / (32767.f - deadZoneThreshold));
-    }
+        result = (f32)((value - deadZoneThreshold) / (f32)(32767.f - deadZoneThreshold));
 
     return result;
 }
@@ -377,7 +344,7 @@ LinuxGetGamepadInput(LinuxGamepad* gamepad, s16 deadZoneThreshold)
         if (event.type == EV_ABS && event.code < ABS_TOOL_WIDTH)
         {
             LinuxGamepadAxis* axis = &gamepad->axes[event.code];
-            axis->value = LinuxProcessJoystick(event.value, deadZoneThreshold);
+            axis->value = LinuxProcessJoystick(event.value, deadZoneThreshold, axis->min, axis->max);
         }
     }
 }
@@ -402,7 +369,14 @@ LinuxCloseGamepads(LinuxGamepad* gamepads, int numGamepads)
 }
 
 internal void
-LinuxProcessGamepadDigitalButton(LinuxGamepad* gamepad, GameButtonState* oldState, u16 buttonCode, GameButtonState* newState)
+LinuxSetGamepadButton(bool down, GameButtonState* oldState, GameButtonState* newState)
+{
+    newState->endedDown = down;
+    newState->halfTransitionCount = (oldState->endedDown != newState->endedDown) ? 1 : 0;
+}
+
+internal void
+LinuxProcessGamepadButton(LinuxGamepad* gamepad, GameButtonState* oldState, u16 buttonCode, GameButtonState* newState)
 {
     newState->endedDown = gamepad->buttons[buttonCode-LINUX_GAMEPAD_BUTTON_INDEX_OFFSET];
     newState->halfTransitionCount = (oldState->endedDown != newState->endedDown) ? 1 : 0;
@@ -411,11 +385,9 @@ LinuxProcessGamepadDigitalButton(LinuxGamepad* gamepad, GameButtonState* oldStat
 internal void
 LinuxProcessKeyboardMessage(GameButtonState* newState, bool isDown)
 {
-    if (newState->endedDown != isDown)
-    {
-        newState->endedDown = isDown;
-        ++newState->halfTransitionCount;
-    }
+    ASSERT(newState->endedDown != isDown)
+    newState->endedDown = isDown;
+    ++newState->halfTransitionCount;
 }
 
 internal void
@@ -571,19 +543,19 @@ LinuxDoEvents(LinuxDisplayInfo* displayInfo, Atom wmDelete, GameControllerInput*
                 
                 if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_W)) 
                 {
-                    LinuxProcessKeyboardMessage(&keyboardController->north, isDown);
+                    LinuxProcessKeyboardMessage(&keyboardController->stickNorth, isDown);
                 }
                 if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_A)) 
                 {
-                    LinuxProcessKeyboardMessage(&keyboardController->west, isDown);
+                    LinuxProcessKeyboardMessage(&keyboardController->stickWest, isDown);
                 }
                 if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_S)) 
                 {
-                    LinuxProcessKeyboardMessage(&keyboardController->south, isDown);
+                    LinuxProcessKeyboardMessage(&keyboardController->stickSouth, isDown);
                 }
                 if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_D)) 
                 {
-                    LinuxProcessKeyboardMessage(&keyboardController->east, isDown);
+                    LinuxProcessKeyboardMessage(&keyboardController->stickEast, isDown);
                 }
                 if (keyEvent->keycode == XKeysymToKeycode(displayInfo->xDisplay, XK_Q)) 
                 {
@@ -669,24 +641,29 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    GameControllerInput zeroController = {0};
-    LinuxGamepad gamepads[LINUX_MAX_GAMEPADS] = {0};
-    LinuxOpenGamepads(gamepads, LINUX_MAX_GAMEPADS);
+    const GameControllerInput zeroController = {0};
+    LinuxGamepad gamepads[1 + LINUX_MAX_GAMEPADS] = {0}; // NOTE(Cel): The +1 is the keyboard
+    LinuxOpenGamepads(gamepads + 1, LINUX_MAX_GAMEPADS);
     GameInput input[2] = {0};
     GameInput* oldInput = &input[0];
     GameInput* newInput = &input[1];
-    int numControllers = LINUX_MAX_GAMEPADS;
+    int numControllers = LINUX_MAX_GAMEPADS + 1;
     if (numControllers > ArrayCount(newInput->controllers)) numControllers = ArrayCount(newInput->controllers);
 
     u64 performaceFrequency = LinuxGetPerformaceFrequency();
     u64 lastCounter = LinuxGetPerformaceCounter();
     while (g_gameRunning)
     {
-        GameControllerInput* keyboardController = &newInput->controllers[0];
-        *keyboardController = zeroController;
-        LinuxDoEvents(&displayInfo, wmDelete, keyboardController);
+        GameControllerInput* oldKeyboardController = &oldInput->controllers[0];
+        GameControllerInput* newKeyboardController = &newInput->controllers[0];
+        *newKeyboardController = zeroController;
+        for (int button = 0; button < ArrayCount(newKeyboardController->buttons); ++button)
+        {
+            newKeyboardController->buttons[button].endedDown = oldKeyboardController->buttons[button].endedDown;
+        }
+        LinuxDoEvents(&displayInfo, wmDelete, newKeyboardController);
 
-        for (int i = 0; i < numControllers; ++i)
+        for (int i = 1; i < numControllers; ++i)
         {
             if (gamepads[i].connected)
             {
@@ -695,26 +672,29 @@ int main(int argc, char** argv)
                 GameControllerInput* oldController = &oldInput->controllers[i];
                 GameControllerInput* newController = &newInput->controllers[i];
 
-                LinuxProcessGamepadDigitalButton(&gamepads[i], &oldController->south, BTN_A, &newController->south);
-                LinuxProcessGamepadDigitalButton(&gamepads[i], &oldController->east, BTN_B, &newController->east);
-                LinuxProcessGamepadDigitalButton(&gamepads[i], &oldController->north, BTN_Y, &newController->north);
-                LinuxProcessGamepadDigitalButton(&gamepads[i], &oldController->west, BTN_X, &newController->west);
-                newController->startX = oldController->endX;
-                newController->startX = oldController->endY;
-                newController->minX = newController->maxX = newController->endX = gamepads[i].axes[0].value;
-                newController->minY = newController->maxY = newController->endY = gamepads[i].axes[1].value;
-                newController->isAnalog = true;
+                LinuxProcessGamepadButton(&gamepads[i], &oldController->buttonSouth, BTN_A, &newController->buttonSouth);
+                LinuxProcessGamepadButton(&gamepads[i], &oldController->buttonEast, BTN_B, &newController->buttonEast);
+                LinuxProcessGamepadButton(&gamepads[i], &oldController->buttonNorth, BTN_Y, &newController->buttonNorth);
+                LinuxProcessGamepadButton(&gamepads[i], &oldController->buttonWest, BTN_X, &newController->buttonWest);
 
-
-               // fprintf(stderr, "%s: | ", gamepads[0].name);
-                fprintf(stderr, "X1 Axis: %f", gamepads[0].axes[0].value);
-                fprintf(stderr, "Y1 Axis: %f", gamepads[0].axes[1].value);
-               // fprintf(stderr, "A Button: %d | ", gamepads[0].buttons[0]);
-               // fprintf(stderr, "B Button: %d | ", gamepads[0].buttons[1]);
-               // fprintf(stderr, "X Button: %d | ", gamepads[0].buttons[3]); //NOTE(Cel:) What even is a 'c' button anyway?
-               // fprintf(stderr, "Y Button: %d | ", gamepads[0].buttons[4]);
+                if (newController->stickAverageX != 0.f || newController->stickAverageY != 0.f) { newController->isAnalog = true; } else { newController->isAnalog = false; }
+                newController->stickAverageX = gamepads[i].axes[0].value;
+                newController->stickAverageY = gamepads[i].axes[1].value;
+                f32 stickRegisterThreshold = .5f;
+                LinuxSetGamepadButton(newController->stickAverageY < -stickRegisterThreshold ? true : false, &oldController->stickSouth, &newController->stickSouth);
+                LinuxSetGamepadButton(newController->stickAverageX > stickRegisterThreshold ? true : false, &oldController->stickEast, &newController->stickEast);
+                LinuxSetGamepadButton(newController->stickAverageY > stickRegisterThreshold ? true : false, &oldController->stickNorth, &newController->stickNorth);
+                LinuxSetGamepadButton(newController->stickAverageX < -stickRegisterThreshold ? true : false, &oldController->stickWest, &newController->stickWest);
+#if 0
+                fprintf(stderr, "%s: | ", gamepads[i].name);
+                fprintf(stderr, "X1 Axis: %f", gamepads[i].axes[0].value);
+                fprintf(stderr, "Y1 Axis: %f", gamepads[i].axes[1].value);
+                fprintf(stderr, "A Button: %d | ", gamepads[i].buttons[0]);
+                fprintf(stderr, "B Button: %d | ", gamepads[i].buttons[1]);
+                fprintf(stderr, "X Button: %d | ", gamepads[i].buttons[3]); //NOTE(Cel:) What even is a 'c' button anyway?
+                fprintf(stderr, "Y Button: %d | ", gamepads[i].buttons[4]);
                 fprintf(stderr, "\n");
-
+#endif
             }
         }
 
