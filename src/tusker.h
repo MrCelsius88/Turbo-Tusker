@@ -35,7 +35,6 @@
 #define persist static
 
 #define M_PI 3.14159265358979323846
-#define FPS 30
 
 #include <stdint.h>
 typedef int8_t s8;

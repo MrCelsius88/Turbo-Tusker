@@ -61,12 +61,14 @@
 #include <unistd.h>
 #include <time.h>
 #include <dirent.h>
+#include <dlfcn.h>
 #include <linux/joystick.h>
 #include <linux/input.h>
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/Xatom.h>
+#include <X11/extensions/Xrandr.h>
 
 typedef struct
 {
@@ -94,6 +96,24 @@ typedef struct
 } LinuxGamepad;
 
 global bool g_gameRunning = true;
+
+#define XRRSIZES(name) XRRScreenSize* name(Display* dpy, int screen, int* nsizes)
+typedef XRRSIZES(xrr_sizes);
+XRRSIZES(XRRSizesStub)
+{
+    return NULL;
+}
+global xrr_sizes* XRRSizes_ = XRRSizesStub;
+#define XRRSizes XRRSizes_
+
+#define XRRRATES(name) short* name(Display* dpy, int screen, int size_index, int* nrates)
+typedef XRRRATES(xrr_rates);
+XRRRATES(XRRRatesStub)
+{
+    return NULL;
+}
+global xrr_rates* XRRRates_ = XRRRatesStub;
+#define XRRRates XRRRates_
 
 #define GLX_CREATE_CONTEXT_ATTRIBS_ARB(name) GLXContext name(Display *dpy, GLXFBConfig config, GLXContext share_context, Bool direct, const int *attrib_list)
 typedef GLX_CREATE_CONTEXT_ATTRIBS_ARB(glx_create_context_attribs_arb);
@@ -168,6 +188,19 @@ DebugPlatformFileFreeMemory(DebugFileData* fileData)
 }
 
 internal void
+LinuxLoadXRandRFuncs(void)
+{
+    void* handle = dlopen("libXrandr.so", RTLD_LAZY);
+    if (handle != 0)
+    {
+        XRRSizes = dlsym(handle, "XRRSizes");
+        if (!XRRSizes) { XRRSizes = XRRSizesStub; }
+        XRRRates = dlsym(handle, "XRRRates");
+        if (!XRRRates) { XRRRates = XRRRatesStub; }
+    }
+}
+
+internal void
 LinuxLoadGlxFuncs(void)
 {
     glXCreateContextAttribsARB = (glx_create_context_attribs_arb*)glXGetProcAddressARB((const GLubyte*)"glXCreateContextAttribsARB");
@@ -234,6 +267,23 @@ LinuxGetPerformaceFrequency(void)
     return 1000000000;
 }
 
+internal s16
+LinuxGetWindowRefreshRate(LinuxDisplayInfo* displayInfo)
+{
+    s16 monitorRefreshHz = 60;
+
+    int nScreenSizes;
+    XRRScreenSize* screenSizes = XRRSizes(displayInfo->xDisplay, displayInfo->xScreen, &nScreenSizes);
+    if (screenSizes == 0) { return monitorRefreshHz; }
+    // TODO(Cel): loop over all screen sizes to find the most optimal?
+    int nScreenRates;
+    s16* supportedRefreshHz = XRRRates(displayInfo->xDisplay, displayInfo->xScreen, 0, &nScreenRates);
+    if (supportedRefreshHz == 0) { return monitorRefreshHz; }
+
+    monitorRefreshHz = supportedRefreshHz[0];
+    return monitorRefreshHz;
+}
+
 internal void
 LinuxSetSizeHint(LinuxDisplayInfo* displayInfo, int minWidth, int maxWidth, int minHeight, int maxHeight)
 {
@@ -260,6 +310,7 @@ LinuxDisplayInit(LinuxDisplayInfo* displayInfo, bool createVisualInfo)
     }
     displayInfo->xScreen = DefaultScreen(displayInfo->xDisplay);
     displayInfo->xRootWindow = DefaultRootWindow(displayInfo->xDisplay);
+    LinuxLoadXRandRFuncs();
 
     // TODO(Cel): We cant use this because of OpenGL
     if (createVisualInfo)
@@ -429,6 +480,7 @@ LinuxCreateWindow(LinuxDisplayInfo* displayInfo, const char* title, int posX, in
     XMapWindow(displayInfo->xDisplay, displayInfo->xWindow);
     // Apply Changes
     XFlush(displayInfo->xDisplay);
+
     return 0;
 }
 
@@ -664,6 +716,9 @@ int main(int argc, char** argv)
         fprintf(stderr, "Error initializing OpenGL!\n");
         return 1;
     }
+
+    s16 monitorRefreshHz = LinuxGetWindowRefreshRate(&displayInfo);
+    fprintf(stderr, "Monitor refresh rate: %d\n", monitorRefreshHz);
 
 #if TUSKER_INTERNAL
     void* baseAddress = (void*)TERABYTES(2);
